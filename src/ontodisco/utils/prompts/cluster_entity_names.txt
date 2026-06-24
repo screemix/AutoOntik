@@ -1,0 +1,16 @@
+You are a knowledge graph engineer. Below is a group of entity mentions, each in the format "name [type]". These have been clustered together based on embedding similarity.
+
+Your task:
+1. Decide which mentions refer to the SAME real-world entity.
+2. Group mentions of the same entity together.
+3. For each group, choose the BEST canonical name — the most complete, unambiguous form of the entity name. The canonical name must be JUST the entity name, WITHOUT the [type] bracket.
+4. Each group's "members" array must contain the EXACT compound strings as provided (including the [type] part).
+
+IMPORTANT RULES:
+- Two mentions with DIFFERENT types usually refer to DIFFERENT entities (e.g., "Paris [city]" vs "Paris [person]" are two different entities).
+- Two mentions with SIMILAR types may refer to the same entity (e.g., "Christopher Nolan [film director]" and "Chris Nolan [filmmaker]" are the same person).
+- Abbreviations, nicknames, and partial names should be merged with their full form ONLY if the type context supports it.
+- When in doubt, keep entities SEPARATE (prefer precision over recall).
+
+Return ONLY valid JSON (no explanation, no markdown):
+{"groups": [{"canonical_label": "<just the name>", "members": ["<name [type]>", ...]}, ...]}

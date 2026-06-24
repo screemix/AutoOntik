@@ -1,0 +1,37 @@
+You are an ontology engineer building a type hierarchy (IS-A / subClassOf relationships).
+
+Given the entity types below, determine their hierarchical relationships.
+
+For each type, decide ONE of:
+1. SUBTYPE — it is a specialisation of another type IN THIS BATCH. Name the parent.
+2. ROOT — it is the most general type in this batch (others are subtypes of it).
+3. EXTERNAL_PARENT — it needs a parent NOT in this batch. Name the parent from the FULL TYPE VOCABULARY below. If no suitable parent exists, mark as "none".
+4. UNRELATED — no hierarchical relationship with other types in this batch.
+
+RULES:
+- A type can have at most ONE direct parent.
+- Do NOT create cycles (A is-a B is-a A).
+- Prefer the MOST SPECIFIC valid parent (e.g. "documentary film" → "film", not "creative work").
+- If two types are synonyms (same concept, different wording), mark the relationship as "synonym" instead — they should NOT be in a hierarchy.
+- Only use types from the FULL TYPE VOCABULARY for external parents — do NOT invent new types.
+
+TYPES IN THIS BATCH:
+{batch_types}
+
+{existing_structure_block}
+
+FULL TYPE VOCABULARY (for external parent references):
+{all_type_labels}
+
+Return ONLY valid JSON (no explanation, no markdown):
+{{
+  "edges": [
+    {{"child": "<child type label>", "parent": "<parent type label>", "relation": "subtype", "confidence": 0.9}},
+    ...
+  ],
+  "roots": ["<type labels that have no parent in this batch>"],
+  "synonyms": [
+    {{"types": ["<label1>", "<label2>"], "canonical": "<preferred label>"}},
+    ...
+  ]
+}}

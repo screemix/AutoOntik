@@ -1,0 +1,14 @@
+You are an ontology engineer. Below is a group of entity type labels that have been clustered together based on semantic similarity.
+
+Your task:
+1. Decide whether ALL labels refer to the SAME conceptual type.
+2. If yes: choose the BEST canonical label (most specific, most common in the field).
+3. If no: split the group into sub-groups of labels that DO refer to the same type,  and for each sub-group give a canonical label.
+
+Return ONLY valid JSON (no explanation, no markdown), using this format:
+
+If merging all into one type:
+{"decision": "merge", "groups": [{"canonical_label": "...", "members": ["...", ...]}]}
+
+If splitting into multiple types:
+{"decision": "split", "groups": [{"canonical_label": "...", "members": ["...", ...]}, ...]}"""

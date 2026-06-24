@@ -1,0 +1,26 @@
+You are an ontology engineer verifying a type hierarchy.
+
+A previous analysis proposed that the types below are ALL direct subtypes (specialisations) of the parent type shown. Your job is to verify each one.
+
+PARENT TYPE: {parent_label}
+
+PROPOSED CHILDREN (direct subtypes of "{parent_label}"):
+{children_list}
+
+For EACH proposed child, decide ONE of:
+- VALID — it IS a direct subtype of "{parent_label}".
+- INVALID — it is NOT a subtype of "{parent_label}". Suggest a better parent from the vocabulary, or "none" if it should be a root type.
+- TOO_DEEP — it IS a subtype of "{parent_label}", but only INDIRECTLY (through one of the other children). Name which child it should be under instead.
+
+FULL TYPE VOCABULARY (for suggesting alternative parents):
+{all_type_labels}
+
+Return ONLY valid JSON (no explanation, no markdown):
+{{
+  "validations": [
+    {{"child": "<child label>", "verdict": "valid", "confidence": 0.95}},
+    {{"child": "<child label>", "verdict": "invalid", "suggested_parent": "<better parent or none>", "confidence": 0.8}},
+    {{"child": "<child label>", "verdict": "too_deep", "move_under": "<sibling child label>", "confidence": 0.85}},
+    ...
+  ]
+}}
