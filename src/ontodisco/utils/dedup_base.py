@@ -27,6 +27,9 @@ from tqdm import tqdm
 
 import torch
 from transformers import AutoTokenizer, AutoModel
+import dotenv
+dotenv.load_dotenv()
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +78,9 @@ class ContrieverEmbedder:
         self.device = device
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name, use_safetensors=True).to(self.device)
+        self.model = AutoModel.from_pretrained(model_name, use_safetensors=True, trust_remote_code=True, token=os.getenv("HF_KEY")).to(self.device)
         self.model.eval()
+        self.api_key = os.getenv("HF_KEY")
 
     def _mean_pool(
         self,
@@ -196,7 +200,7 @@ def verify_clusters_with_llm(
             verified_groups.append((members[0], members))
         else:
             try:
-                groups = llm_verifier.verify_cluster_with_llm(members)
+                groups = llm_verifier.verify_entity_type_cluster_with_llm(members)
             except Exception:
                 logger.exception("LLM verification failed for cluster %d, keeping HAC grouping", cluster_id)
                 verified_groups.append((members[0], members))
@@ -367,20 +371,24 @@ def deduplicate(
         texts = unique_labels
     embeddings = embedder.embed(texts, batch_size=embed_batch_size)
 
-    # ── Step 3: HAC clustering ────────────────────────────────────────────────
-    # returns cluster number (int) for each unique label
-    cluster_labels = cluster_hac(embeddings, threshold=hac_threshold, linkage=hac_linkage)
+    # ── Step 3: Candidate clustering ────────────────────────────────────────
+    if cluster_fn is not None:
+        cluster_labels = cluster_fn(embeddings)
+    else:
+        cluster_labels = cluster_hac(embeddings, threshold=hac_threshold, linkage=hac_linkage)
 
     clusters: dict[int, list[str]] = defaultdict(list)
     for norm_label, cl in zip(unique_labels, cluster_labels):
         clusters[int(cl)].append(norm_label)
 
-    multi_member = sum(1 for m in clusters.values() if len(m) > 1)
+    multi_member_sizes = [len(v) for v in clusters.values() if len(v) > 1]
     logger.info(
-        "HAC produced %d clusters (%d with 2+ members, requiring LLM verification)",
-        len(clusters), multi_member,
+        "Clustering produced %d clusters (%d with 2+ members, requiring LLM verification)",
+        len(clusters), len(multi_member_sizes),
     )
-    logger.info("Mean cluster size for clusters with 2+ members: %s", {k: len(v) for k, v in clusters.items() if len(v) > 1 }.mean())
+    if multi_member_sizes:
+        logger.info("Mean cluster size for clusters with 2+ members: %.1f",
+                     sum(multi_member_sizes) / len(multi_member_sizes))
 
     # ── Step 4: LLM verification ─────────────────────────────────────────────
     verified_groups = verify_clusters_with_llm(clusters, llm_verifier)
