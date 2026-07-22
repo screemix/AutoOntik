@@ -5,9 +5,9 @@ Shared Deduplication Infrastructure
 Base module for surface-form deduplication. Provides:
   - ContrieverEmbedder — dense embedding via Meta's Contriever
   - normalize_label    — Unicode NFKC + lowercase + whitespace collapse
-  - cluster_hac        — Hierarchical Agglomerative Clustering
+  - cluster_hdbscan    — HDBSCAN-based candidate clustering
   - verify_clusters_with_llm — LLM merge/split verification loop
-  - deduplicate()      — the shared 4-step pipeline (embed → HAC → LLM → build)
+  - deduplicate()      — the shared 4-step pipeline (embed → HDBSCAN → LLM → build)
 
 Both type_dedup.py and entity_dedup.py are thin wrappers around this module.
 """
@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 import numpy as np
-from sklearn.cluster import AgglomerativeClustering
+from sklearn.cluster import HDBSCAN
 from sklearn.metrics.pairwise import cosine_distances
 from tqdm import tqdm
 
@@ -45,7 +45,7 @@ class CanonicalItem:
     canonical_label: str
     count_per_normalized: int = 0
     surface_forms: list[str] = field(default_factory=list)
-    surface_form_counts: dict[str, int] = field(default_factory=defaultdict(int))
+    surface_form_counts: dict[str, int] = field(default_factory=lambda: defaultdict(int))
 
 
 @dataclass
@@ -57,7 +57,7 @@ class DeduplicationResult:
     num_canonical: int = 0
     reduction_pct: float = 0.0
     normalized_to_raws: dict[str, set[str]] = field(default_factory=dict)
-    surface_form_counts: dict[str, int] = field(default_factory=defaultdict(int))
+    surface_form_counts: dict[str, int] = field(default_factory=lambda: defaultdict(int))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -130,39 +130,124 @@ def normalize_label(label: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  HAC Clustering
+#  Union-Find
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def cluster_hac(
-    embeddings: np.ndarray,
-    threshold: float = 0.8,
-    linkage: str = "average",
+def union_find_from_pairs(
+    n: int,
+    pairs: list[tuple[int, int]],
 ) -> np.ndarray:
     """
-    Cluster embeddings using Hierarchical Agglomerative Clustering.
+    Build connected components from a sparse list of (i, j) pairs
+    using union-find with path compression and union by rank.
+
+    Shared by relation_dedup.py's and entity_dedup.py's FAISS-NN candidate
+    generation, and by relation_context.py's TF-IDF cluster-merge step.
+
+    Returns array of integer cluster labels, shape (N,).
+    """
+    if n <= 1:
+        return np.zeros(n, dtype=int)
+
+    parent = list(range(n))
+    rank = [0] * n
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x: int, y: int) -> None:
+        px, py = find(x), find(y)
+        if px == py:
+            return
+        if rank[px] < rank[py]:
+            px, py = py, px
+        parent[py] = px
+        if rank[px] == rank[py]:
+            rank[px] += 1
+
+    for i, j in pairs:
+        union(i, j)
+
+    labels = np.array([find(i) for i in range(n)])
+    unique_roots = {r: idx for idx, r in enumerate(sorted(set(labels)))}
+    return np.array([unique_roots[labels[i]] for i in range(n)])
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  HDBSCAN Clustering
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def cluster_hdbscan(
+    embeddings: np.ndarray,
+    threshold: float = 0.8,
+    *,
+    min_cluster_size: int = 2,
+    min_samples: int = 1,
+) -> np.ndarray:
+    """
+    Cluster embeddings using HDBSCAN, parameterised to approximate the same
+    "merge if cosine similarity >= threshold" semantics the HAC/FAISS
+    candidate generation this replaced used, while additionally letting
+    variable-density substructure *within* that threshold band form separate
+    clusters instead of one fixed global cut.
 
     Args:
-        embeddings:  (N, D) array of L2-normalised embeddings.
-        threshold:   Cosine *similarity* threshold (converted to distance internally).
-        linkage:     "average", "complete", or "single".
+        embeddings:       (N, D) array of L2-normalised embeddings.
+        threshold:        Cosine *similarity* threshold. Converted internally to
+                           `cluster_selection_epsilon = 1 - threshold` (a cosine
+                           *distance*): pairs farther apart than this can never
+                           land in the same cluster, but within it HDBSCAN is
+                           free to find whatever locally-stable groupings exist.
+        min_cluster_size: HDBSCAN's minimum cluster size (clamped to >= 2 --
+                           HDBSCAN itself requires this).
+        min_samples:      HDBSCAN's core-distance neighbour count. Left at 1
+                           (the most permissive setting available) to stay
+                           close to a flat pairwise-threshold merge rather than
+                           imposing a density requirement no HAC/FAISS call
+                           site here ever needed.
+
+    `allow_single_cluster=True` is required: HDBSCAN's default rejects a
+    pool that has no viable sub-split at the very top of its internal
+    hierarchy and marks EVERY point as noise instead of calling it one
+    cluster -- verified empirically (not a hypothetical edge case) to
+    otherwise silently noise-out an entire well-formed group of 5+
+    near-duplicate labels that obviously belong together.
+
+    Points HDBSCAN leaves unclustered (label -1, "noise") become their own
+    singleton cluster in the returned labels, matching every other cluster_fn
+    in this pipeline: unclustered means "no confident merge partner", not
+    "dropped".
 
     Returns:
         Array of integer cluster labels, shape (N,).
     """
-    distance_threshold = 1.0 - threshold
-    distance_matrix = cosine_distances(embeddings)
+    n = len(embeddings)
+    if n <= 1:
+        return np.zeros(n, dtype=int)
 
-    if len(embeddings) <= 1:
-        return np.zeros(len(embeddings), dtype=int)
+    distance_matrix = cosine_distances(embeddings).astype(np.float64)
+    np.fill_diagonal(distance_matrix, 0.0)
+    epsilon = max(0.0, 1.0 - threshold)
 
-    clustering = AgglomerativeClustering(
-        n_clusters=None,
-        distance_threshold=distance_threshold,
+    clusterer = HDBSCAN(
         metric="precomputed",
-        linkage=linkage,
+        min_cluster_size=max(2, min_cluster_size),
+        min_samples=min_samples,
+        cluster_selection_epsilon=epsilon,
+        allow_single_cluster=True,
     )
+    raw_labels = clusterer.fit_predict(distance_matrix)
 
-    return clustering.fit_predict(distance_matrix)
+    labels = raw_labels.copy()
+    next_id = int(labels.max()) + 1 if (labels >= 0).any() else 0
+    for i in range(n):
+        if labels[i] == -1:
+            labels[i] = next_id
+            next_id += 1
+    return labels
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -175,12 +260,20 @@ def verify_clusters_with_llm(
     *,
     verbose: bool = True,
     token_log_every: int = 10,
+    surface_form_type: str = 'entity_type',
+    member_context: dict[str, str] | None = None,
 ) -> list[tuple[str, list[str]]]:
     """
     Send each multi-member HAC cluster to the LLM for merge/split verification.
 
     The llm_verifier must implement verify_cluster_with_llm(members: list[str])
     returning a list of dicts with "canonical_label" and "members" keys.
+
+    member_context: optional normalised label -> evidence string, forwarded to
+    llm_verifier.verify_cluster_with_llm(..., member_context=...) so the LLM sees
+    e.g. relational-context evidence alongside each candidate. Only members
+    present in this cluster's list are included in the sub-dict passed down;
+    labels with no evidence are simply omitted (not padded with "").
 
     Returns:
         List of (canonical_label, [member_labels]) tuples.
@@ -200,7 +293,12 @@ def verify_clusters_with_llm(
             verified_groups.append((members[0], members))
         else:
             try:
-                groups = llm_verifier.verify_entity_type_cluster_with_llm(members)
+                call_kwargs = {"surface_form_type": surface_form_type}
+                if member_context is not None:
+                    call_kwargs["member_context"] = {
+                        m: member_context[m] for m in members if m in member_context
+                    }
+                groups = llm_verifier.verify_cluster_with_llm(members, **call_kwargs)
             except Exception:
                 logger.exception("LLM verification failed for cluster %d, keeping HAC grouping", cluster_id)
                 verified_groups.append((members[0], members))
@@ -269,14 +367,16 @@ def verify_clusters_with_llm(
 
 def deduplicate(
     all_labels: list[str],
-    llm_verifier,
     embedder: ContrieverEmbedder,
+    llm_verifier = None,
+    surface_form_type: str = 'entity_type',
     *,
     normalizer: Callable[[str], str] = normalize_label,
     embedding_text_fn: Callable[[str], str] | None = None,
     cluster_fn: Callable[[np.ndarray], np.ndarray] | None = None,
+    cluster_postprocess_fn: Callable[[dict[int, list[str]]], dict[int, list[str]]] | None = None,
+    member_context: dict[str, str] | None = None,
     hac_threshold: float = 0.8,
-    hac_linkage: str = "average",
     embed_batch_size: int = 64,
     id_prefix: str = "item",
     id_width: int = 4,
@@ -298,12 +398,25 @@ def deduplicate(
                              text to embed (e.g. type-augmented for entities).
                              If None, embeds normalised labels directly.
         cluster_fn:          Custom clustering function: (embeddings) → cluster_labels.
-                             When provided, replaces HAC for candidate generation.
-                             When None (default), uses cluster_hac with hac_threshold
-                             and hac_linkage.
-        hac_threshold:       Cosine similarity threshold for HAC (used only when
-                             cluster_fn is None).
-        hac_linkage:         HAC linkage method (used only when cluster_fn is None).
+                             When provided, replaces HDBSCAN for candidate generation.
+                             When None (default), uses cluster_hdbscan with hac_threshold.
+        cluster_postprocess_fn: Optional function: (clusters: dict[cluster_id, [labels]])
+                             → clusters. Runs after clustering but before LLM
+                             verification, so it can additionally MERGE separate
+                             clusters together using evidence outside the label
+                             embedding (e.g. relation_context.merge_clusters_by_relation_signature,
+                             which unions clusters whose relation-signature TF-IDF
+                             cosine similarity exceeds a threshold). Cannot split
+                             clusters, only coarsen them further.
+        member_context:      Optional normalised label → human-readable evidence
+                             string, shown to the LLM verifier alongside each
+                             candidate (e.g. "film (context: often object of:
+                             directed, starred in)"). Purely additive context;
+                             does not affect clustering.
+        hac_threshold:       Cosine similarity threshold for HDBSCAN (used only when
+                             cluster_fn is None) -- see cluster_hdbscan() for how this
+                             maps to cluster_selection_epsilon. Named hac_threshold for
+                             config/call-site compatibility with pre-HDBSCAN callers.
         embed_batch_size:    Batch size for Contriever.
         id_prefix:           Prefix for generated IDs (e.g. "type", "ent").
         id_width:            Zero-pad width for IDs.
@@ -375,23 +488,45 @@ def deduplicate(
     if cluster_fn is not None:
         cluster_labels = cluster_fn(embeddings)
     else:
-        cluster_labels = cluster_hac(embeddings, threshold=hac_threshold, linkage=hac_linkage)
+        cluster_labels = cluster_hdbscan(embeddings, threshold=hac_threshold)
 
     clusters: dict[int, list[str]] = defaultdict(list)
     for norm_label, cl in zip(unique_labels, cluster_labels):
         clusters[int(cl)].append(norm_label)
+    clusters = dict(clusters)
 
-    multi_member_sizes = [len(v) for v in clusters.values() if len(v) > 1]
     logger.info(
         "Clustering produced %d clusters (%d with 2+ members, requiring LLM verification)",
-        len(clusters), len(multi_member_sizes),
+        len(clusters), sum(1 for v in clusters.values() if len(v) > 1),
     )
+
+    # ── Step 3b: Optional cluster-merge postprocessing ───────────────────────
+    # e.g. relation_context.merge_clusters_by_relation_signature: additionally
+    # union clusters whose relation-signature similarity is high, even if their
+    # label embeddings never put them in the same HAC cluster.
+    if cluster_postprocess_fn is not None:
+        before = len(clusters)
+        clusters = cluster_postprocess_fn(clusters)
+        logger.info(
+            "Cluster postprocessing: %d clusters → %d clusters",
+            before, len(clusters),
+        )
+
+    multi_member_sizes = [len(v) for v in clusters.values() if len(v) > 1]
     if multi_member_sizes:
         logger.info("Mean cluster size for clusters with 2+ members: %.1f",
                      sum(multi_member_sizes) / len(multi_member_sizes))
 
     # ── Step 4: LLM verification ─────────────────────────────────────────────
-    verified_groups = verify_clusters_with_llm(clusters, llm_verifier)
+    if llm_verifier is not None:
+        verified_groups = verify_clusters_with_llm(
+            clusters, llm_verifier, surface_form_type=surface_form_type,
+            member_context=member_context,
+        )
+    else:
+        verified_groups: list[tuple[str, list[str]]] = []
+        for _, members in clusters.items():
+            verified_groups.append((members[0], members))
 
     # ── Step 5: Build result ─────────────────────────────────────────────────
     items: dict[str, CanonicalItem] = {}
@@ -440,5 +575,5 @@ def deduplicate(
         num_canonical=num_canonical,
         reduction_pct=reduction,
         normalized_to_raws=dict(normalized_to_raws),
-        count_per_normalized=dict(count_per_normalized),
+        surface_form_counts=dict(surface_form_counts),
     )

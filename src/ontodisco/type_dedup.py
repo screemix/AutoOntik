@@ -12,22 +12,32 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from src.ontodisco.utils.dedup_base import (
     CanonicalItem,
     ContrieverEmbedder,
     DeduplicationResult,
-    cluster_hac,
+    cluster_hdbscan,
     deduplicate,
     normalize_label,
     verify_clusters_with_llm,
 )
+from src.ontodisco.relation_context import (
+    build_relation_counts,
+    build_type_relation_profiles,
+    describe_relation_context,
+    merge_clusters_by_relation_signature,
+)
+
+if TYPE_CHECKING:
+    from src.ontodisco.relation_dedup import RelationDeduplicationResult
 
 logger = logging.getLogger(__name__)
 
 # ── Backward-compatible re-exports ────────────────────────────────────────────
 normalize_type_label = normalize_label
-cluster_types_hac = cluster_hac
+cluster_types_hdbscan = cluster_hdbscan
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -78,22 +88,51 @@ def deduplicate_types(
     *,
     contriever_model: str = "facebook/contriever",
     hac_threshold: float = 0.85,
-    hac_linkage: str = "average",
     embed_batch_size: int = 64,
     device: str = None,
+    relation_result: "RelationDeduplicationResult | None" = None,
+    relation_signature_merge_threshold: float = 0.8,
+    relation_context_top_k: int = 5,
 ) -> TypeDeduplicationResult:
     """
-    Full type deduplication pipeline: normalise → embed → HAC → LLM verify.
+    Full type deduplication pipeline: normalise → embed → HDBSCAN → LLM verify.
 
     Args:
         raw_type_labels:   All type labels from extracted triplets (may contain
                            duplicates).
         llm_extractor:     LLMTripletExtractor instance with verify_cluster_with_llm().
         contriever_model:  HuggingFace model ID for Contriever.
-        hac_threshold:     Cosine similarity threshold for HAC.
-        hac_linkage:       HAC linkage method.
+        hac_threshold:     Cosine similarity threshold for HDBSCAN candidate
+                           clustering (see dedup_base.cluster_hdbscan() for how
+                           this maps to cluster_selection_epsilon). Kept under
+                           this name for config/call-site compatibility.
         embed_batch_size:  Batch size for Contriever encoding.
         device:            Device for Contriever ("cuda", "cpu", or None for auto).
+        relation_result:   Optional RelationDeduplicationResult from relation
+                           dedup (relation_dedup.deduplicate_relations()). When
+                           given, two additional relation-signature signals
+                           kick in:
+                             1. Clusters produced by label HDBSCAN are additionally
+                                merged together (before LLM verification) when
+                                their aggregate relation-signature (TF-IDF)
+                                cosine similarity exceeds
+                                relation_signature_merge_threshold — this can
+                                pull together labels whose bare-label
+                                embeddings never clustered them (e.g. "movie"
+                                and "flick" if HDBSCAN missed it, but both fill
+                                identical relation argument slots).
+                             2. Each candidate shown to the LLM verifier is
+                                annotated with a short relational-context
+                                description (e.g. "film (context: often
+                                appears as object of: directed, starred in)"),
+                                giving the LLM concrete evidence for merge/
+                                split decisions.
+                           When None, behavior is identical to before this
+                           parameter existed.
+        relation_signature_merge_threshold: TF-IDF cosine similarity above
+                           which two HDBSCAN clusters are unioned (see above).
+        relation_context_top_k: How many top relation dimensions to
+                           render per label in the LLM-facing context string.
 
     Returns:
         TypeDeduplicationResult with the canonical type vocabulary.
@@ -102,26 +141,45 @@ def deduplicate_types(
 
     embedder = ContrieverEmbedder(model_name=contriever_model, device=device)
 
-    def _build_type(item_id, canonical_label, surface_forms, mention_count,
+    def _build_type(item_id, canonical_label, surface_forms, count_per_normalized,
                     surface_form_counts):
         return CanonicalType(
             item_id=item_id,
             canonical_label=canonical_label,
             surface_forms=surface_forms,
-            mention_count=mention_count,
+            count_per_normalized=count_per_normalized,
             surface_form_counts=surface_form_counts,
         )
+
+    cluster_postprocess_fn = None
+    member_context = None
+    if relation_result is not None:
+        relation_counts = build_relation_counts(relation_result)
+        tfidf_profiles = build_type_relation_profiles(relation_counts, weighting="tfidf")
+        ppmi_profiles = build_type_relation_profiles(relation_counts, weighting="ppmi")
+
+        cluster_postprocess_fn = lambda clusters: merge_clusters_by_relation_signature(
+            clusters, tfidf_profiles, threshold=relation_signature_merge_threshold,
+        )
+        member_context = {
+            label: describe_relation_context(
+                label, ppmi_profiles, relation_result, top_k=relation_context_top_k,
+            )
+            for label in relation_counts
+        }
+        member_context = {label: ctx for label, ctx in member_context.items() if ctx}
 
     base_result = deduplicate(
         all_labels=raw_type_labels,
         llm_verifier=llm_extractor,
         embedder=embedder,
         hac_threshold=hac_threshold,
-        hac_linkage=hac_linkage,
         embed_batch_size=embed_batch_size,
         id_prefix="type",
         id_width=4,
         build_item=_build_type,
+        cluster_postprocess_fn=cluster_postprocess_fn,
+        member_context=member_context,
     )
 
     return TypeDeduplicationResult(

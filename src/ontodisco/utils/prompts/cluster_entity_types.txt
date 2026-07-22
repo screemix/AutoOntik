@@ -1,9 +1,30 @@
-You are an ontology engineer. Below is a group of entity type labels that have been clustered together based on semantic similarity.
+You are an ontology engineer. Below is a group of entity type labels that have been clustered together based on semantic similarity. Some candidates may be annotated with "(context: ...)", describing which relations they tend to appear as the subject/object of in the corpus.
 
 Your task:
 1. Decide whether ALL labels refer to the SAME conceptual type.
 2. If yes: choose the BEST canonical label (most specific, most common in the field).
 3. If no: split the group into sub-groups of labels that DO refer to the same type,  and for each sub-group give a canonical label.
+
+CRITICAL TEST for step 1 -- two labels are the SAME type only if they are simply
+two names for the identical concept, interchangeable in any sentence. Before
+merging, apply this test: can you naturally say "an X is a kind of Y" (or "a Y,
+specifically an X")? If so, they are NOT the same type -- X is a more specific
+type and Y is a more general one, and they MUST be split into separate groups,
+even though they are obviously related and even though they may share almost
+all the same context relations. For example: "documentary film" is a kind of
+"film" -> split, never merge, regardless of how similar their contexts look.
+"movie" and "film" are just two names for the same thing, with no "kind of"
+relationship between them -> merge. Heavy context/relation overlap is expected
+and NORMAL for a specific type and its general type (a documentary film
+participates in almost every relation "film" does) -- it is NOT by itself
+evidence for merging; the "kind of" test always takes priority over context
+similarity. When genuinely unsure whether two labels are identical or in a
+"kind of" relationship, prefer splitting: a missed merge can still be corrected
+later, but a wrong merge silently and permanently destroys the distinction.
+
+Contexts remain useful evidence for the OPPOSITE case: if two labels look
+similar but their contexts share no relations in common at all, prefer
+splitting them into different (likely unrelated or homonymous) types.
 
 Return ONLY valid JSON (no explanation, no markdown), using this format:
 

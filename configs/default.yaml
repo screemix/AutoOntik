@@ -1,0 +1,54 @@
+# configs/default.yaml
+#
+# Config for src/ontodisco/pipeline.py -- covers only the steps currently
+# implemented: Relation Canonicalization, Type Canonicalization, Hierarchy
+# Induction, Entity Deduplication. Extraction / Constraint Induction /
+# Serialization are not implemented yet and have no config section here.
+
+corpus_id: "my_corpus"
+input_path: "./data/musique_initial_triplets.jsonl"   # JSONL file, one raw triplet dict per line
+output_dir: "./output"
+
+# ── LLM client ────────────────────────────────────────────────────────────────
+llm:
+  model: "Sber/GigaChat3.5-432B-A28B"
+  api_key_env: "AIRI_KEY"       # name of the env var holding the key -- never put the key itself here
+  base_url: "https://inference.airi.net:46783/v1"
+
+# ── Embedding client ──────────────────────────────────────────────────────────
+embedding:
+  contriever_model: "facebook/contriever"
+  device: null                        # "cuda" | "cpu" | null (auto)
+  embed_batch_size: 64
+
+# ── Relation Canonicalization ─────────────────────────────────────────────────
+# Candidate clustering is HDBSCAN (dedup_base.cluster_hdbscan) over the full
+# pairwise cosine-distance matrix -- similarity_threshold sets HDBSCAN's
+# cluster_selection_epsilon.
+relation_canonicalization:
+  similarity_threshold: 0.75
+
+# ── Type Canonicalization ─────────────────────────────────────────────────────
+type_canonicalization:
+  hac_threshold: 0.75          # HDBSCAN cluster_selection_epsilon = 1 - this (name kept for compatibility)
+  relation_signature_merge_threshold: 0.75
+  relation_context_top_k: 5
+
+# ── Hierarchy Induction ───────────────────────────────────────────────────────
+hierarchy:
+  fusion_weight_embedding: 0.5
+  relation_signature_weighting: "ppmi"
+  hac_threshold_floor: 0.35    # HDBSCAN cluster_selection_epsilon = 1 - this, per round
+  max_depth: 15
+  max_batch_size: 15
+  min_batch_size: 2
+  embed_batch_size: 64
+  context_top_k: 5
+  col_num_votes: 1
+  col_vote_agreement: 1
+
+# ── Entity Deduplication + Class Assignment ───────────────────────────────────
+# Candidates are partitioned by shared immediate parent in the TypeHierarchy
+# first, then clustered with HDBSCAN within each partition.
+entity_canonicalization:
+  similarity_threshold: 0.85

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import openai
 
 # import os
@@ -75,6 +77,10 @@ class LLMTripletExtractor:
                 "triplet_extraction": "prompt_1_with_types_and_qualifiers.txt",
                 "cluster_entity_types": "cluster_entity_types.txt",
                 "cluster_entity_names": "cluster_entity_names.txt",
+                "cluster_relations": "cluster_relations.txt",
+                "hierarchy_cluster_action": "hierarchy_cluster_action.txt",
+                "relation_direction": "relation_direction.txt",
+                "hierarchy_label_disambiguation": "hierarchy_label_disambiguation.txt",
             }
 
         # Load all prompts (paths may include subfolders, e.g. triplet_extraction/foo.txt)
@@ -135,7 +141,7 @@ class LLMTripletExtractor:
     #     before_sleep=before_sleep_log(logger, logging.ERROR),
     #     stop=stop_after_attempt(5),
     # )
-    @tenacity.retry(stop=stop_never, reraise=True)
+    @tenacity.retry(stop=stop_after_attempt(5), reraise=True)
     def get_completion(
         self, system_prompt: str, user_prompt: str, transform_to_json: bool = True
     ) -> Union[dict, list, str]:
@@ -203,10 +209,36 @@ class LLMTripletExtractor:
             if attempt > self.MAX_ATTEMPTS:
                 raise e
         
-    def verify_entity_type_cluster_with_llm(self, members: list[str]) -> list[tuple[str, list[str]]]:
-        """Verify clusters with LLM."""
+    def verify_cluster_with_llm(
+        self, members: list[str], surface_form_type='entity_type',
+        member_context: Optional[Dict[str, str]] = None,
+    ) -> list[tuple[str, list[str]]]:
+        """Verify clusters with LLM.
+
+        member_context: optional label -> relational-context evidence string
+        (e.g. "often appears as object of: directed, starred in"), rendered
+        alongside each candidate so the LLM has concrete evidence for merge/
+        split decisions beyond surface-form similarity.
+        """
+        if surface_form_type == 'entity_type':
+            system_prompt = self.prompts["cluster_entity_types"]
+        elif surface_form_type == 'entity':
+            system_prompt = self.prompts["cluster_entity_names"]
+        elif surface_form_type == 'relation':
+            system_prompt = self.prompts["cluster_relations"]
+        else:
+            raise Exception("Unknown surface form type")
+
+        if member_context:
+            candidates_str = ", ".join(
+                f"{m} (context: {member_context[m]})" if member_context.get(m) else m
+                for m in members
+            )
+        else:
+            candidates_str = ", ".join(members)
+
         response = self.get_completion(
-            system_prompt=self.prompts["cluster_entity_types"], user_prompt=f'Candidates: {", ".join(members)}')
+            system_prompt=system_prompt, user_prompt=f'Candidates: {candidates_str}')
 
         logger.log(logging.DEBUG, f"Input: {members}")
         logger.log(logging.DEBUG, f"Response: {response}")
@@ -221,28 +253,167 @@ class LLMTripletExtractor:
             groups = response.get("merged", []) or response.get("split", [])
 
         return groups
-    
-            
-    def verify_entity_name_cluster_with_llm(self, members: list[str]) -> list[tuple[str, list[str]]]:
-        """Verify clusters with LLM."""
+
+    def resolve_hierarchy_cluster(
+        self, members: list[str],
+        member_context: Optional[Dict[str, str]] = None,
+    ) -> list[dict]:
+        """Ask the LLM to organise one cluster of type labels into subClassOf
+        groups, for hierarchy induction (see hierarchy_induction.py).
+
+        members: candidate labels in this cluster. May include labels that are
+        themselves an abstraction formed in an earlier round of the same
+        recursive process, not just raw corpus surface forms.
+        member_context: optional label -> relation-signature evidence string
+        (e.g. "directed, produced, starred in"), shown alongside each
+        candidate so the LLM has concrete distributional evidence.
+
+        Returns the raw "groups" list from the LLM response (each a dict with
+        "action" ["merge"|"no_parent"|"same_concept"], "members", and for
+        merges "parent"/"parent_is_new"/"parent_definition"/"confidence").
+        "same_concept" groups have no "parent" -- they mark members as the
+        identical concept under different wording, to be collapsed rather
+        than given a hierarchy edge. The caller is responsible for validating
+        group contents and mapping labels back to type_ids.
+        """
+        system_prompt = self.prompts["hierarchy_cluster_action"]
+
+        if member_context:
+            candidates_str = ", ".join(
+                f"{m} (context: {member_context[m]})" if member_context.get(m) else m
+                for m in members
+            )
+        else:
+            candidates_str = ", ".join(members)
+
         response = self.get_completion(
-            system_prompt=self.prompts["cluster_entity_names"], user_prompt=f'Candidates: {", ".join(members)}')
+            system_prompt=system_prompt, user_prompt=f"Types: {candidates_str}"
+        )
 
         logger.log(logging.DEBUG, f"Input: {members}")
         logger.log(logging.DEBUG, f"Response: {response}")
 
         if isinstance(response, str):
-            logger.warning("verify_entity_name_cluster_with_llm: LLM returned unparseable string")
+            logger.warning("resolve_hierarchy_cluster: LLM returned unparseable string")
             return []
 
         groups = response.get("groups", [])
         if not groups:
-            # Fallback: maybe the LLM used "merged"/"split" keys (variant format)
-            groups = response.get("merged", []) or response.get("split", [])
+            logger.warning("resolve_hierarchy_cluster: LLM response had no 'groups' key")
 
         return groups
 
-    
+    def disambiguate_duplicate_labels(
+        self, groups: list[Dict],
+    ) -> Dict[str, list[list[str]]]:
+        """
+        Ask the LLM to partition candidate type nodes that share an identical
+        label into same-concept clusters (see hierarchy_induction.py's
+        _reconcile_duplicate_labels -- called only for the subset of
+        duplicate-labeled groups whose relation-argument profiles couldn't
+        already confirm or deny sameness on their own).
+
+        groups: list of {"label": str, "candidates": [{"id", "definition",
+        "relation_context"}, ...]}.
+
+        Returns label -> list of clusters (each a list of candidate ids).
+        Falls back to "every candidate is its own cluster" (i.e. no merge)
+        for any label missing from the response, or any candidate id the
+        response dropped -- an unconfirmed merge is a worse failure mode
+        here than a leftover duplicate, which just gets re-tried next round.
+        """
+        system_prompt = self.prompts["hierarchy_label_disambiguation"]
+        payload = [
+            {
+                "label": group["label"],
+                "candidates": [
+                    {"id": c["id"], "definition": c.get("definition", ""),
+                     "relation_context": c.get("relation_context", "")}
+                    for c in group["candidates"]
+                ],
+            }
+            for group in groups
+        ]
+        response = self.get_completion(
+            system_prompt=system_prompt, user_prompt=f"Groups: {json.dumps(payload)}"
+        )
+
+        logger.log(logging.DEBUG, f"Input: {payload}")
+        logger.log(logging.DEBUG, f"Response: {response}")
+
+        result: Dict[str, list[list[str]]] = {}
+        parsed = response if isinstance(response, dict) else {}
+        if not isinstance(response, dict):
+            logger.warning("disambiguate_duplicate_labels: LLM returned unparseable response")
+
+        for group in groups:
+            label = group["label"]
+            all_ids = [c["id"] for c in group["candidates"]]
+            raw_clusters = parsed.get(label)
+
+            if not isinstance(raw_clusters, list):
+                result[label] = [[tid] for tid in all_ids]
+                continue
+
+            seen: set = set()
+            clusters: list[list[str]] = []
+            for raw_cluster in raw_clusters:
+                if not isinstance(raw_cluster, list):
+                    continue
+                cluster = [tid for tid in raw_cluster if tid in all_ids and tid not in seen]
+                if not cluster:
+                    continue
+                seen.update(cluster)
+                clusters.append(cluster)
+
+            # Any candidate id the response silently dropped stays its own
+            # (unmerged) cluster rather than being lost.
+            for tid in all_ids:
+                if tid not in seen:
+                    clusters.append([tid])
+
+            result[label] = clusters
+
+        return result
+
+    def classify_relation_direction(
+        self, canonical_label: str, surface_forms: list[str],
+    ) -> Dict[str, str]:
+        """
+        Classify each surface form merged into one canonical relation as
+        "forward" or "inverted" relative to canonical_label
+        (see constraints.py's direction-resolution stage for why this is
+        needed: relation canonicalization is role-blind, so a canonical
+        relation can silently pool a predicate with its grammatical
+        inverse).
+
+        Only worth calling when a canonical relation has more than one
+        surface form -- callers should treat a single-surface-form relation
+        as trivially "forward" without invoking this.
+        """
+        system_prompt = self.prompts["relation_direction"]
+        user_prompt = (
+            f'Canonical relation: "{canonical_label}"\n'
+            f"Surface forms: {json.dumps(surface_forms)}"
+        )
+
+        response = self.get_completion(system_prompt=system_prompt, user_prompt=user_prompt)
+
+        logger.log(logging.DEBUG, f"Input: {canonical_label} / {surface_forms}")
+        logger.log(logging.DEBUG, f"Response: {response}")
+
+        if isinstance(response, str) or not isinstance(response, dict):
+            logger.warning(
+                "classify_relation_direction: LLM returned unparseable response for %r",
+                canonical_label,
+            )
+            return {sf: "forward" for sf in surface_forms}
+
+        labels = response.get("labels", {})
+        # Defensively default any surface form the LLM omitted to "forward"
+        # (no swap applied) rather than dropping it.
+        return {sf: labels.get(sf, "forward") for sf in surface_forms}
+
     def calculate_cost(self) -> float:
         """Calculate the total cost of API usage."""
         return self.current_cost / 1e6

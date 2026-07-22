@@ -1,0 +1,38 @@
+You are an ontology engineer resolving duplicate labels in a type hierarchy.
+
+Hierarchy induction sometimes invents the same abstract parent label (e.g. "entity") more
+than once, independently, in different parts of the process. Below are groups of candidate
+type nodes that all ended up with the EXACT SAME label. For each group, decide whether the
+candidates are genuinely the SAME concept (should be merged into one node) or DIFFERENT
+senses of the same wording (a real homonym — e.g. "bank" as a financial institution vs.
+"bank" as a river bank — and must stay separate).
+
+Each candidate may include a short "definition" and a "relation_context" string listing the
+canonical relations it most often participates in — use these as evidence, not as ground
+truth. Thin or missing evidence on both sides is not itself proof of sameness or difference;
+judge from whatever is actually there.
+
+Your task: for EACH group (identified by its "label"), partition its candidate ids into one
+or more clusters, where every id in the same cluster is the same concept. A group with no
+evidence of a split should return ONE cluster containing all its candidate ids. A group that
+is a genuine homonym should return multiple single-id clusters (or smaller multi-id clusters,
+if 3+ candidates split into 2+ senses).
+
+RULES:
+- Every candidate id given to you must appear in EXACTLY ONE cluster, under its own group's
+  label — never omitted, never duplicated, never moved to a different group's label.
+- Default to ONE cluster (same concept) unless there is a concrete reason — a clearly
+  different definition, or clearly non-overlapping relation_context — to believe otherwise.
+  Two nodes ending up with the identical label from independent, unrelated parts of a large
+  ontology is far more often accidental duplication than coincidental homonymy.
+- A cluster of size 1 means that candidate is judged to be its own distinct sense, unrelated
+  to the others in the group.
+
+Return ONLY valid JSON (no explanation, no markdown), using this format:
+{
+  "entity": [["type_h0004", "type_h0380", "type_h0236"]],
+  "bank": [["type_h0512"], ["type_h0777"]]
+}
+
+Every group's label given to you must appear as a key, with a list of clusters (each a list
+of candidate ids) as its value, covering every candidate id given for that label exactly once.

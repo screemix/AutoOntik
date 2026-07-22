@@ -1,0 +1,76 @@
+You are an ontology engineer building a type hierarchy (subClassOf / IS-A relationships).
+
+Below is a cluster of type labels that have been grouped together because they are
+distributionally close: similar meaning and/or similar relation-argument behaviour
+(which relations they tend to participate in, as either argument). Some candidates
+are annotated with "(context: ...)", listing the canonical relations they most often
+participate in — use this as evidence, not as ground truth.
+
+IMPORTANT: some labels in this cluster may ALREADY be an abstraction formed in a
+previous round of this same process (e.g. "mammal" formed earlier from "cat" and
+"dog"), not a label pulled directly from the source text. Treat them exactly like
+any other candidate label. Because abstractions are invented independently, in
+separate batches with no shared context, this cluster may also contain two (or
+more) labels that are not parent/child at all but are actually the SAME concept,
+worded differently (e.g. "entity" and "generic entity" formed in unrelated
+batches). Watch for this explicitly — see action 3 below.
+
+Your task: decide, for this cluster, how the types relate to each other, and act
+on it. Every relationship you propose must be exactly ONE of these three kinds —
+they are NOT interchangeable, and picking the wrong one is a real error:
+
+1. "merge" — a genuine IS-A relationship: some types are a more specific case of
+   one shared, more general type.
+   - Prefer PROMOTING one of the existing members to be that parent, if one of
+     them is already general enough to cover the others (e.g. "film" is a good
+     parent for "documentary film" and "biographical film" — set "parent" to
+     "film" and "parent_is_new" to false; "film" itself is NOT repeated in
+     "members" — list only its children there).
+   - Only invent a NEW canonical label (not one of the members) if NONE of the
+     existing members is a suitable parent for the rest. If you invent one, set
+     "parent_is_new" to true and give a one-sentence "parent_definition".
+   - Do NOT use "merge" for two types that are actually the same concept under
+     different wording — that is action 3, not this one. Forcing a parent/child
+     edge between synonyms creates a fake, meaningless hierarchy level.
+
+2. "no_parent" — these types are genuinely unrelated (or merely siblings under
+   some ancestor outside this cluster) — NOT parent/child, and NOT the same
+   concept either. Group them together under this action; you do not need to
+   explain why.
+
+3. "same_concept" — these types are NOT in a parent/child relationship at all —
+   they refer to the identical concept, just phrased differently (e.g. "entity"
+   / "generic entity", "vehicle" / "means of transport"). List ALL of them in
+   "members" (there is no "parent" for this action — omit it). Use this whenever
+   you'd otherwise be tempted to force one of them to be the other's parent, or
+   to decline via "no_parent", but the real reason they don't fit a hierarchy
+   relationship is that they're the same thing twice, not that they're unrelated.
+
+RULES:
+- Every input type must appear in EXACTLY ONE output group, and in EXACTLY ONE
+  role there: either as a "member", or (if promoted) as a "merge" group's
+  "parent" — never both, and never in more than one group. For example, if
+  "film" is promoted to parent one group, it must NOT also appear as a "member"
+  of any other group in this same response — pick one role for it and stop.
+- It is completely fine to split the cluster into MULTIPLE groups of different
+  actions — do not force everything into one relationship just because they were
+  clustered together. If in doubt, prefer more, smaller, well-justified groups
+  over one large uncertain one.
+- A type can never be its own parent, and a proposed parent must never also
+  appear in that same group's "members" list.
+- A "same_concept" group needs at least 2 members (a single label can't be a
+  duplicate of itself).
+- "confidence" is a plain JSON number between 0.0 and 1.0 (e.g. 0.9, 0.75, 1,
+  0) — NEVER a word ("high"), a spelled-out number ("zero point nine"), or a
+  fraction ("9/10"). It reflects how confident you are in the relationship
+  itself, not in the wording of the label.
+
+Return ONLY valid JSON (no explanation, no markdown), using this format:
+{{
+  "groups": [
+    {{"action": "merge", "members": ["documentary film", "biographical film"], "parent": "film", "parent_is_new": false, "confidence": 0.9}},
+    {{"action": "merge", "members": ["car", "bicycle"], "parent": "vehicle", "parent_is_new": true, "parent_definition": "A machine used to transport people or goods.", "confidence": 0.75}},
+    {{"action": "same_concept", "members": ["entity", "generic entity"], "confidence": 0.85}},
+    {{"action": "no_parent", "members": ["ocean current"], "confidence": 0.0}}
+  ]
+}}
