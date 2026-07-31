@@ -168,7 +168,19 @@ class HierarchyConfig:
                                                        # into their seed parent as its anchor. No pinned
                                                        # node (root or not) is ever itself placed by the
                                                        # priority-band loop -- only ever offered as a
-                                                       # candidate.
+                                                       # candidate. A dict entry may also carry an
+                                                       # optional "description" -- becomes the node's
+                                                       # definition (_Node.definition), but only when the
+                                                       # label is freshly synthesized (no T* match); an
+                                                       # existing T* type's own (currently always empty)
+                                                       # definition is never overwritten by a seed's
+                                                       # description. Feeds BOTH embed_text() (embedding/
+                                                       # similarity ranking) AND the "(context: ...)"
+                                                       # shown to the LLM during placement (_node_context)
+                                                       # -- the latter matters most for a synthesized seed
+                                                       # node, which otherwise reaches the LLM as a bare
+                                                       # label with zero context (no relation evidence
+                                                       # exists yet for a node nothing has attached under).
     seed_roots_path: Optional[str] = None       # path to a separate YAML file holding the seed
                                                  # hierarchy (a `seed_roots:` key, same shape as above,
                                                  # or a bare top-level list), so a reusable seed ontology
@@ -392,6 +404,36 @@ def _collapse_duplicate_nodes(
     return survivor_id
 
 
+def _node_context(
+    node: _Node, batch_profiles: dict[str, dict[str, float]],
+    relation_vocab: "RelationDeduplicationResult", top_k: int,
+) -> str:
+    """Everything worth telling the LLM about one node beyond its bare
+    label, combined into the single "(context: ...)" parenthetical
+    resolve_hierarchy_relation already renders per focal/candidate
+    (openai_utils.py:306-316) -- no prompt-format change needed on that
+    side. Two independent sources, joined when both exist:
+      - node.definition: a seed's "description" (_apply_seed_roots), or an
+        LLM-synthesized SynthesizedType's own definition -- otherwise "".
+        This is the ONLY way seed-node descriptions ever reach the LLM's
+        placement decision; embed_text() (used for embedding/similarity
+        ranking) is a separate consumer of the same field, not this one.
+      - the PPMI relation-signature summary (describe_relation_context) --
+        "" for a freshly-synthesized seed node, which has no relation
+        evidence at all (profile={}) until something attaches under it.
+    Definition matters most for exactly that case: without it, a synthesized
+    seed node like "conceptual entity" would reach the LLM as a bare label
+    with NO context whatsoever, since describe_relation_context alone
+    returns "" for it."""
+    parts = []
+    if node.definition:
+        parts.append(node.definition)
+    rel_ctx = describe_relation_context(node.type_id, batch_profiles, relation_vocab, top_k=top_k)
+    if rel_ctx:
+        parts.append(rel_ctx)
+    return "; ".join(parts)
+
+
 def _resolve_relation_with_llm(
     focal_node: _Node,
     candidate_nodes: list[_Node],
@@ -405,11 +447,9 @@ def _resolve_relation_with_llm(
     outcome (this node just doesn't resolve this call, and either escalates
     to the next batch or settles at its current position)."""
     batch_profiles = {n.type_id: n.profile for n in [focal_node] + candidate_nodes}
-    focal_context = describe_relation_context(
-        focal_node.type_id, batch_profiles, relation_vocab, top_k=config.context_top_k,
-    )
+    focal_context = _node_context(focal_node, batch_profiles, relation_vocab, config.context_top_k)
     candidate_context = {
-        n.label: describe_relation_context(n.type_id, batch_profiles, relation_vocab, top_k=config.context_top_k)
+        n.label: _node_context(n, batch_profiles, relation_vocab, config.context_top_k)
         for n in candidate_nodes
     }
     candidate_context = {label: ctx for label, ctx in candidate_context.items() if ctx}
@@ -546,6 +586,18 @@ def _apply_seed_roots(
     root with no seed parent -- or a dict {"label": ..., "children": [...]}
     whose children are recursively applied one level down, each connected
     to its seed parent by a trusted (non-LLM) HierarchyEdge (is_seed=True).
+    An optional "description" key on a dict entry becomes that node's
+    `_Node.definition` -- the same field `SynthesizedType.definition`
+    already plays during ordinary LLM-driven placement -- but ONLY when the
+    label is freshly SYNTHESIZED (no match in T*). A label that matches an
+    existing T* type keeps that type's own (empty, today) definition rather
+    than being overwritten by a generic external gloss, since that would
+    silently change an already-established corpus type's embedding/prompt
+    context as a side effect of seeding. Consumed downstream by both
+    `embed_text()` (embedding/similarity ranking) and `_node_context()` (the
+    "(context: ...)" shown to the LLM per candidate during placement) --
+    without it, a synthesized seed node reaches the LLM as a bare label with
+    no context at all, since it starts with an empty relation profile.
 
     Only ROOT-level seed nodes are added to `pool` -- they're the only ones
     ever offered as top-level (current_anchor=None) candidates. Nested seed
@@ -564,14 +616,14 @@ def _apply_seed_roots(
     assigned_parent: set[str] = set()
     label_to_id = {normalize_label(n.label): tid for tid, n in pool.items()}
 
-    def _resolve_one(label: str) -> str:
+    def _resolve_one(label: str, description: str = "") -> str:
         norm = normalize_label(label)
         existing_id = label_to_id.get(norm)
         if existing_id is not None:
             return existing_id
         new_id = f"type_seed{synthetic_counter[0]:04d}"
         synthetic_counter[0] += 1
-        new_node = _Node(type_id=new_id, label=label.strip(), profile={}, is_leaf=False)
+        new_node = _Node(type_id=new_id, label=label.strip(), profile={}, is_leaf=False, definition=description.strip())
         all_nodes[new_id] = new_node
         label_to_id[norm] = new_id
         return new_id
@@ -580,15 +632,17 @@ def _apply_seed_roots(
         for item in items:
             if isinstance(item, dict):
                 label = str(item.get("label", "")).strip()
+                description = str(item.get("description", "") or "").strip()
                 children = item.get("children") or []
             else:
                 label = str(item).strip()
+                description = ""
                 children = []
             if not label:
                 logger.warning("Skipping seed entry with no label: %r", item)
                 continue
 
-            node_id = _resolve_one(label)
+            node_id = _resolve_one(label, description)
             if parent_id is None:
                 pool[node_id] = all_nodes[node_id]
                 pinned_roots.add(node_id)

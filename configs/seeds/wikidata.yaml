@@ -1,0 +1,302 @@
+# configs/seeds/wikidata.yaml
+#
+# Wikidata-derived seed hierarchy, for use as an external
+# `hierarchy.seed_roots_path` in a pipeline config -- see e.g.
+# configs/gpt_oss_dolce_seeded.yaml for the DOLCE equivalent. Loaded by
+# pipeline.load_seed_roots() into hierarchy_induction.HierarchyConfig.seed_roots
+# at run time.
+#
+# Provenance (CLAUDE.md §15.3 / §15.5): roots are the 9 direct P279 children
+# of Wikidata's `entity` (Q35120) marked "accept": true by hand in
+# output/seed_roots/wikidata_tree.json's `root_candidates` (produced by
+# scripts/seed_roots/wikidata_roots.py). Each root's own children were then
+# fetched independently -- not via the shared-budget collect_seed_tree() BFS,
+# which only ever reaches a couple of these before running out of budget, but
+# via scripts/seed_roots/expand_accepted_roots.py, one dedicated query per
+# accepted root -- keeping up to the top 10 of each root's own direct P279
+# subclasses, ranked by subclass count.
+#
+# `description:` on each entry is Wikidata's own item description (verbatim,
+# where one exists -- a handful of entries have none and the key is omitted
+# rather than left empty). It flows into hierarchy_induction._apply_seed_roots
+# -> _Node.definition, but ONLY for a label that gets freshly SYNTHESIZED (no
+# match in this corpus's own type vocabulary T*) -- if a seed label happens to
+# match an existing T* type, that type's own (currently always empty)
+# definition is left alone rather than overwritten by a Wikidata gloss that
+# may not reflect this corpus's actual usage of the term. From there it feeds
+# BOTH embed_text() (embedding/similarity ranking) AND _node_context() (the
+# "(context: ...)" shown to the LLM per candidate during placement) -- the
+# latter matters most here, since a freshly-synthesized node otherwise
+# reaches the LLM as a bare label with zero context (no relation evidence
+# exists yet for a node nothing has attached under).
+#
+# Two fixups applied by hand versus the raw query result:
+#   - Q7401 ("part", a musical-composition section) sits as a CHILD of the
+#     root "part" (Q13196193, "separate element of a larger entity") -- same
+#     bare label at two tree positions would otherwise silently collapse into
+#     ONE node under _apply_seed_roots's normalized-label matching, producing
+#     a self-referential seed edge. Relabeled "part (musical composition)".
+#   - One child of "location" (Q2330585) has no English label on Wikidata
+#     (the label service falls back to its own QID) and was dropped as
+#     unusable.
+#
+# Caveat carried over from CLAUDE.md §15.3's findings and the research
+# conversation that produced this file: Wikidata's class hierarchy is
+# organic/community-edited, not curated the way DOLCE or a hand-built NER
+# type system is -- some entries here are narrow/idiosyncratic (e.g.
+# "Tamkang University location" under `location`, "pleading" under `part`),
+# and a few descriptions are themselves modeling artifacts rather than
+# genuine definitions (e.g. "Tamkang University location": "subclass used
+# for 'instance of' (P31) and E426"). Review before relying on this as a
+# production seed set; it's a faithful snapshot of the query result, not a
+# quality-filtered ontology.
+
+seed_roots:
+  - label: part
+    description: "separate element of a larger entity. For integral parts, see Q1310239."
+    # Q13196193 -- 239 subclasses, 586 instances; direct child of Wikidata's entity (Q35120)
+    children:
+      - label: component
+        description: "self-contained constituent part of a larger technical entity such as an assembly of elements"
+        # Q1310239 -- 175 subclasses
+      - label: volume
+        description: "book in a series, typically identified sequentially (e.g. Volume 3)"
+        # Q1238720 -- 97 subclasses
+      - label: zone
+        description: "part of a larger area or volume with some distinguishing characteristic"
+        # Q219858 -- 91 subclasses
+      - label: sample
+        description: "limited quantity of material which is intended to be similar to and represent a larger amount of that material"
+        # Q485146 -- 30 subclasses
+      - label: scene
+        description: "each of the divisions of a theatrical, cinematographic or television work"
+        # Q1185607 -- 17 subclasses
+      - label: appurtenance
+        description: "term for what belongs to and goes with something else"
+        # Q227505 -- 7 subclasses
+      - label: act
+        description: "division or unit of a drama"
+        # Q421744 -- 7 subclasses
+      - label: word stem
+        description: "word part responsible for a word's lexical meaning"
+        # Q210523 -- 6 subclasses
+      - label: part (musical composition)
+        description: "section of a musical composition"
+        # Q7401 -- 5 subclasses
+      - label: pleading
+        description: "in law, statement of a party's claims or defenses to another party's claims in a civil action"
+        # Q329381 -- 3 subclasses
+      - label: side
+        description: "in chess, either the a, b, c-files (the queenside) or the f, g, h-files (the kingside)"
+        # Q349582 -- 2 subclasses
+  - label: type
+    description: "kind or variety of something"
+    # Q21146257 -- 184 subclasses, 48 instances; direct child of Wikidata's entity (Q35120)
+    children:
+      - label: data type
+        description: "classification of data in computer science"
+        # Q190087 -- 60 subclasses
+      - label: archetype
+        description: "model pattern from which other objects, ideas or concepts are derived"
+        # Q131714 -- 13 subclasses
+      - label: suit
+        description: "categories into which the cards of a deck are divided"
+        # Q27905 -- 6 subclasses
+      - label: blood type
+        description: "classification of blood based on antibodies and antigens on red blood cell surfaces"
+        # Q47657 -- 6 subclasses
+      - label: form of life
+        description: "philosophical concept of Ludwig Wittgenstein"
+        # Q422742 -- 4 subclasses
+      - label: somatotype
+        description: "taxonomy to categorize human physiques"
+        # Q1501937 -- 3 subclasses
+      - label: ryūha
+        description: "a school or a school of thought"
+        # Q2386338 -- 2 subclasses
+      - label: syntactic category
+        description: "type of syntactic role played by a word or phrase, largely corresponding to traditional parts of speech"
+        # Q5253026 -- 2 subclasses
+      - label: chemical series
+        description: "grouping of chemical elements"
+        # Q19549 -- 1 subclasses
+      - label: archive type
+        # Q636033 -- 1 subclasses (no Wikidata description)
+  - label: result
+    description: "final consequence or product of a sequence of actions or events"
+    # Q2995644 -- 85 subclasses, 68 instances; direct child of Wikidata's entity (Q35120)
+    children:
+      - label: punishment
+        description: "imposition of an undesirable or unpleasant outcome"
+        # Q186361 -- 132 subclasses
+      - label: failure
+        description: "state or event of not meeting a desired or intended objective"
+        # Q1121708 -- 77 subclasses
+      - label: income
+        description: "consumption and savings opportunity gained by an entity within a specified timeframe"
+        # Q1527264 -- 55 subclasses
+      - label: composition
+        description: "placement or arrangement of visual elements or ingredients in a work of art"
+        # Q462437 -- 16 subclasses
+      - label: unintended consequences
+        description: "outcomes that are not the ones intended or foreseen by a purposeful action, resulting from a variety of reasons, including the world's inherent complexity as well as cognitive or emotional biases"
+        # Q1135789 -- 16 subclasses
+      - label: economic profit
+        description: "concept in economics"
+        # Q26911 -- 15 subclasses
+      - label: score
+        description: "in games, abstract quantity associated with a player or team, which tracks the results of game play and determines the winner"
+        # Q522344 -- 15 subclasses
+      - label: points classification
+        description: "Bicycle racing award type"
+        # Q1627215 -- 10 subclasses
+      - label: output
+        description: "what comes out of something (input)"
+        # Q1150771 -- 8 subclasses
+      - label: upbringing
+        description: "type of education"
+        # Q2353731 -- 8 subclasses
+  - label: abstract entity
+    description: "entity that does not have a physical existence, including abstract objects and properties"
+    # Q7048977 -- 66 subclasses, 24 instances; direct child of Wikidata's entity (Q35120)
+    children:
+      - label: property
+        description: "predominant feature that characterizes a being, a thing, a phenomenon, etc. and which differentiates one being from another, one thing from another"
+        # Q937228 -- 334 subclasses
+      - label: information
+        description: "that which informs; the answer to a question; that from which knowledge can be derived"
+        # Q11028 -- 161 subclasses
+      - label: concept
+        description: "semantic unit understood in different ways, e.g. as mental representation, ability or abstract object (philosophy)"
+        # Q151885 -- 129 subclasses
+      - label: conceptual system
+        description: "system composed of non-physical objects, i.e. ideas or concepts"
+        # Q3622126 -- 57 subclasses
+      - label: signal
+        description: "manifestation of information by variation of a physical phenomenon"
+        # Q174984 -- 55 subclasses
+      - label: reasoning
+        description: "type of thought and capacity of consciously making sense of things, applying logic, and adapting or justifying practices, institutions, and beliefs based on new or existing information"
+        # Q1156402 -- 36 subclasses
+      - label: unit
+        description: "entity regarded or used as an elementary structural or functional constituent to measure, analyse or describe another entity"
+        # Q2198779 -- 35 subclasses
+      - label: item
+        description: "object within a game that can be collected or otherwise obtained"
+        # Q859965 -- 26 subclasses
+      - label: level
+        description: "in a video game, space available to the player in completing an objective"
+        # Q1046315 -- 20 subclasses
+      - label: scale
+        description: "system of reference values for a characteristic"
+        # Q1413749 -- 12 subclasses
+  - label: collective entity
+    description: "entity that is a composite of other entities"
+    # Q99527517 -- 39 subclasses, 12 instances; direct child of Wikidata's entity (Q35120)
+    children:
+      - label: equipment
+        description: "collective term for all physical items that are required to exercise a certain activity"
+        # Q10273457 -- 244 subclasses
+      - label: structure
+        description: "arrangement and organization of interrelated elements in an object or system, or the object or system so organized"
+        # Q6671777 -- 160 subclasses
+      - label: system
+        description: "set of interacting or interdependent components"
+        # Q58778 -- 40 subclasses
+      - label: union
+        description: "entity resulting from the act of combining several entities to form one; effect of the action of joining or uniting"
+        # Q17853087 -- 39 subclasses
+      - label: triad
+        description: "concrete group of 3 specific members"
+        # Q29430681 -- 23 subclasses
+      - label: order
+        description: "state of a set of things being arranged"
+        # Q12893838 -- 15 subclasses
+      - label: pentad
+        description: "concrete group of 5 specific members"
+        # Q29428403 -- 11 subclasses
+      - label: dyad
+        description: "concrete group of 2 specific members"
+        # Q29431432 -- 10 subclasses
+      - label: container
+        description: "software class, data structure, or abstract data type (ADT) whose instances are collections of other objects"
+        # Q1643805 -- 8 subclasses
+      - label: tetrad
+        description: "concrete group of 4 specific members"
+        # Q29428373 -- 7 subclasses
+  - label: location
+    description: "location of something (be it physical, virtual, digital, real or fictional)"
+    # Q115095765 -- 10 subclasses, 4 instances; direct child of Wikidata's entity (Q35120)
+    children:
+      - label: physical location
+        description: "position of something in space"
+        # Q17334923 -- 155 subclasses
+      - label: virtual place
+        description: "any digitally created environment"
+        # Q107307154 -- 11 subclasses
+      - label: sports location
+        description: "site where a sport is practiced, whether dedicated to it or not"
+        # Q23764314 -- 10 subclasses
+      - label: computer file location
+        description: "location where a computer file can reside"
+        # Q115517465 -- 1 subclasses
+      - label: occupied location
+        description: "location being occupied by an occupant"
+        # Q123614767 -- 1 subclasses
+      - label: marriage location
+        description: "place where a marriage occurs"
+        # Q124222019 -- 1 subclasses
+      - label: temporary location
+        description: "location created for a period of time, especially during events"
+        # Q128100002 -- 1 subclasses
+      - label: defecation location
+        description: "any place where excrement is yielded"
+        # Q115791500 -- 0 subclasses
+      - label: Tamkang University location
+        description: "subclass used for \"instance of\" (P31) and E426"
+        # Q125469362 -- 0 subclasses (a modeling artifact, not a genuine category -- see header caveat)
+  - label: spatio-temporal entity
+    description: "object with a position in time and space, and possibly an extent in time and/or space"
+    # Q58415929 -- 9 subclasses, 1 instances; direct child of Wikidata's entity (Q35120)
+    children:
+      - label: exhibition
+        description: "organized presentation and display of a selection of items or pictures"
+        # Q464980 -- 47 subclasses
+      - label: temporary structure
+        description: "structure designed to be moved or disassembled when no longer in use"
+        # Q1240161 -- 20 subclasses
+      - label: goods and services
+        description: "outcome of human efforts to meet the wants and needs of people"
+        # Q2897903 -- 11 subclasses
+      - label: spatial object
+        description: "thing occupying some space, entity that can be contained within a region of space"
+        # Q25404640 -- 9 subclasses
+      - label: event
+        description: "spatiotemporal entity/entities that may have (an) associated occurrence/s or planned occurrence and/or related objects"
+        # Q140451665 -- 4 subclasses
+      - label: spacetime region
+        description: "class that contains 4 dimensional point sets (volumes) in physical spacetime"
+        # Q23956024 -- 1 subclasses
+      - label: ergosphere
+        description: "region located outside a rotating black hole's outer event horizon, from which energy can be extracted via the Penrose process"
+        # Q656650 -- 0 subclasses
+      - label: aida
+        description: "Japanese philosophical concept about space"
+        # Q97365371 -- 0 subclasses
+      - label: exhibition in the wild
+        description: "presentation and display of a cultural heritage artefact \"in the wild\""
+        # Q130603369 -- 0 subclasses
+  - label: individual entity
+    description: "entity, be it a thing, a person or any other agent, which is identifiable by its determined characteristics, as contrasted to a class whose characteristics may be varying among its instances"
+    # Q23958946 -- 4 subclasses, 1 instances; direct child of Wikidata's entity (Q35120)
+    children:
+      - label: humanoid
+        description: "entity that has an appearance resembling a human"
+        # Q502931 -- 3 subclasses
+      - label: individual physical object
+        description: "an object that exists both in time and in space"
+        # Q11828321 -- 1 subclasses
+      - label: individual ethnic group
+        # Q130243759 -- 0 subclasses (no Wikidata description)
+      - label: individual sovereign
+        # Q130525759 -- 0 subclasses (no Wikidata description)

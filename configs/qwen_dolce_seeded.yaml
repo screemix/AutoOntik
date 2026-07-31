@@ -45,7 +45,7 @@ hierarchy:
   seed_roots_path: "./configs/seeds/dolce.yaml"              # e.g. ["Endurant", "Perdurant", "Quality", "Abstract"] for a DOLCE-seeded run
   candidate_batch_size: 30
   max_escalation_batches: 3
-  max_depth: 50                # null (YAML) / None (Python) means uncapped -- see hierarchy_induction.HierarchyConfig
+  max_depth: 10                # null (YAML) / None (Python) means uncapped -- see hierarchy_induction.HierarchyConfig
   embed_batch_size: 64
   context_top_k: 5
   max_parallel_workers: 8      # thread pool size for band 2+ (band 1 always runs sequentially)
