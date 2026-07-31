@@ -32,13 +32,32 @@
 \usepackage{graphicx}
 \usepackage{amsmath}
 
+% For reproducing the LLM prompt templates verbatim in the appendix
+% (\S\ref{sec:appendix-prompts}), with automatic line wrapping so they fit
+% within a column.
+\usepackage{listings}
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  breaklines=true,
+  breakautoindent=false,
+  breakindent=0pt,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  frame=single,
+  framesep=3pt,
+  xleftmargin=3pt,
+  xrightmargin=3pt,
+  captionpos=b,
+}
+
 % If the title and author information does not fit in the area allocated, uncomment the following
 %
 %\setlength\titlebox{<dim>}
 %
 % and set <dim> to something 5cm or larger.
 
-\title{Instructions for *ACL Proceedings}
+\title{From Surface Forms to Ontologies: Discovering Type Hierarchies and Property Constraints for Graph-RAG}
 
 % Author information can be set in various styles:
 % For several authors from the same institution:
@@ -116,7 +135,91 @@ These instructions should be used both for papers submitted for review and for f
 \section{Introduction}
 \label{sec:introduction}
 
-% TODO: Introduction -- not yet written.
+Retrieval-augmented generation (RAG) grounds large language model (LLM)
+outputs in evidence retrieved at inference time \citep{lewis2020rag}, but
+retrieval over unstructured, chunked text struggles with multi-hop
+questions whose evidence is scattered across many documents. Graph-based
+RAG addresses this by retrieving over a knowledge graph (KG) instead of
+flat passages, exploiting entities, typed relations, and their
+organization into type hierarchies to support multi-hop reasoning and
+query-time generalization over specific mentions \citep{edge2024graphrag}.
+The quality of graph-based retrieval is therefore bounded by the quality
+of the KG that backs it: a graph with redundant, untyped nodes and
+unconstrained edges offers little more structure than the text it was
+extracted from.
+
+Constructing a KG that actually supports this kind of retrieval requires
+more than extracting entities and relations. It requires (i) a canonical,
+deduplicated vocabulary of entity and relation surface forms, (ii) an
+explicit \emph{is-a} hierarchy over entity types, so that a query about a
+general category (e.g.\ \emph{artwork}) can retrieve instances of any of
+its specializations without enumerating every leaf type by hand, and (iii)
+relation-level domain and range constraints, so that a retrieved triple
+can be validated against the schema the KG itself induces. Traditional
+ontology engineering supplies all three by hand, at a cost that does not
+scale to open-domain corpora; hand-curated top-level ontologies such as
+DOLCE \citep{borgo2023dolce} offer stable, philosophically motivated
+top-level structure but cannot be extended automatically to an arbitrary
+corpus's own vocabulary.
+
+Recent work instead automates (i) directly from text with LLMs. KGGen
+\citep{mo2025kggen} extracts open-vocabulary triples and merges
+near-duplicate entity and relation surface forms via embedding-based
+clustering and LLM-adjudicated verification, producing a substantially
+cleaner graph than raw extraction alone. This flat canonicalization is
+exactly where KGGen -- and schema-free extraction pipelines like it --
+stop: entities and relations are deduplicated, but the resulting graph
+carries no type hierarchy and no domain/range constraints, precisely the
+structure (ii) and (iii) above that graph-based retrieval depends on.
+
+Extending flat canonicalization into a typed, hierarchical ontology
+surfaces problems flat deduplication does not have to solve. Type labels
+are themselves open-vocabulary free text and need the same
+clustering-plus-LLM-verification treatment as entities and relations, but
+naively merging similar type labels systematically conflates general
+categories with their own specializations (e.g.\ \emph{film} and
+\emph{documentary film}), since a specialization participates in nearly
+every relation its parent does and is therefore embedding-similar to it by
+construction. Inducing a hierarchy over the resulting canonical types is a
+distinct problem again: a single-pass or bottom-up placement can
+permanently misattach a type under too shallow a parent whenever a more
+specific sibling type happens to be discovered later, with no mechanism to
+correct the placement afterward. And because relation canonicalization
+merges surface forms without regard to grammatical role, a canonical
+relation can silently pool a predicate together with its grammatical
+inverse, which fragments -- rather than reinforces -- the very
+domain/range evidence constraint induction relies on.
+
+We present \textbf{OntoDisco}, a pipeline that extends KGGen's schema-free
+extract-then-canonicalize approach with the machinery needed to close this
+gap. Our contributions are:
+\begin{itemize}
+  \item A schema-free typed extraction and canonicalization pipeline that,
+  in addition to a deduplicated entity and relation vocabulary, produces a
+  canonical, hierarchically organized entity-type vocabulary and a set of
+  per-relation domain/range constraints (\S\ref{sec:methods}).
+  \item A hyponymy-aware type canonicalization step that combines
+  relation-argument distributional evidence with an explicit
+  \emph{kind-of} test in the verification prompt, so that specializations
+  are not merged into their own parent category (\S\ref{sec:type-dedup}).
+  \item A priority-ordered, top-down hierarchy induction procedure that
+  places types from most to least general, by a Weeds-precision
+  containment signal \citep{weeds2004characterising}, and that -- unlike a
+  single-pass placement -- can retroactively insert a newly placed type
+  \emph{above} an already-placed one, correcting an earlier too-shallow
+  attachment rather than only ever preventing it going forward
+  (\S\ref{sec:hierarchy-induction}).
+  \item An entity deduplication step that resolves entity identity as the
+  pair (name, canonical type) rather than name alone, and restricts
+  embedding-based candidate comparison to a symbolic gate -- identical
+  type or shared immediate parent in the induced hierarchy -- before
+  clustering (\S\ref{sec:entity-dedup}).
+  \item A relation-direction resolution step that detects and corrects
+  merged grammatical inverses before mining domain/range constraints, and
+  a hierarchy-generalized, PCA-style confidence score
+  \citep{galarraga2013amie} for the resulting constraints
+  (\S\ref{sec:constraints}).
+\end{itemize}
 
 \section{Methods: OntoDisco}
 \label{sec:methods}
@@ -145,7 +248,7 @@ The following design choices recur across stages. (1) Deduplication of synonimou
 \subsection{Initial Typed Triplet Extraction}
 \label{sec:extraction}
 Subject and object types are extracted as free text, not
-constrained to any predefined schema. This schema-free design allows the canonical type vocabulary used throughout the rest of the pipeline to emerge from the data itself.
+constrained to any predefined schema. This schema-free design allows the canonical type vocabulary used throughout the rest of the pipeline to emerge from the data itself. The full extraction prompt is given in Appendix~\ref{sec:appendix-prompts}, Listing~\ref{lst:extraction}.
 
 \subsection{Relation Deduplication}
 \label{sec:relation-dedup}
@@ -153,7 +256,7 @@ constrained to any predefined schema. This schema-free design allows the canonic
 Relation canonicalization maps the raw, free-text \texttt{relation} strings observed across all triplets onto a canonical relation vocabulary
 $\mathcal{R}^*$. Candidate clusters are generated by embedding every raw
 relation surface form and clustering with HDBSCAN as described
-before. Every multi-member candidate cluster is then passed to a single LLM call that decides whether to merge all members into one relation or split them into several. 
+before. Every multi-member candidate cluster is then passed to a single LLM call that decides whether to merge all members into one relation or split them into several (Listing~\ref{lst:cluster-relations}).
 
 \subsection{Entity Types Deduplication}
 \label{sec:type-dedup}
@@ -166,8 +269,8 @@ $\mathcal{T}^*$ and organizes $\mathcal{T}^*$ into a taxonomy hierarchy.
 Candidate clusters over raw type labels are generated the same way as for
 relations (\S\ref{sec:relation-dedup}), but with two additional sources of evidence. First, before LLM verification, any two candidate clusters whose relation-argument profiles (TF-IDF-weighted over which canonical relations each type's mentions occur as an argument of) are sufficiently cosine-similar are further merged. Second, each candidate label shown to the LLM verifier is annotated with a the relations it most often co-occurs with, giving the verifier concrete distributional evidence beyond the bare label string.
 
-The verification prompt additionally enforces a hyponymy (``kind of'') test: two labels are merged only if neither is a hyponym of the other, even when their relation-argument profiles overlap almost entirely. For example, \ \emph{documentary film} and \emph{film} participate in the same relations, but LLM instructed to keep them distinct, whereas \emph{movie} and \emph{film}, true synonyms, should 
-be merged.
+The verification prompt additionally enforces a hyponymy (``kind of'') test: two labels are merged only if neither is a hyponym of the other, even when their relation-argument profiles overlap almost entirely. For example, \ \emph{documentary film} and \emph{film} participate in the same relations, but LLM instructed to keep them distinct, whereas \emph{movie} and \emph{film}, true synonyms, should
+be merged. The full prompt, including this hyponymy test, is given in Listing~\ref{lst:cluster-entity-types}.
 
 \subsubsection{Hierarchy induction}
 \label{sec:hierarchy-induction}
@@ -209,8 +312,8 @@ $\mathcal{T}^*$ by normalized label (or synthesized fresh if unmatched) and pinn
 whatever higher-priority bands have already placed: at every level, the
 remaining candidates (initially the whole pool; during descent, an
 already-placed node's existing children) are shown to the LLM in
-similarity-ranked batches, and a response of ``none of these'' escalates to the next, less-similar batch (up to a fixed cap). Every
-batch response is one of four outcomes: 
+similarity-ranked batches (Listing~\ref{lst:hierarchy-pairwise}), and a response of ``none of these'' escalates to the next, less-similar batch (up to a fixed cap). Every
+batch response is one of four outcomes:
 % \textbf{synonym} of a candidate, \textbf{child of} a candidate, \textbf{parent of} a candidate, \textbf{none} of the candidates.
 \begin{itemize}
   \item \textbf{synonym} of a candidate: merge the two synonymous nodes that were not captured in flat clustering deduplication.
@@ -246,7 +349,7 @@ group: two mentions in different partitions could never have merged under the ga
 Within each partition, merging proceeds over several rounds rather than a
 single pass: each round re-embeds the current pool (already-merged
 canonical entities plus untouched singleton mentions), re-clusters with
-HDBSCAN, and sends multi-member clusters to the LLM for verification, then folds accepted merges back into the pool for the next round. Rounds stop
+HDBSCAN, and sends multi-member clusters to the LLM for verification (Listing~\ref{lst:cluster-entity-names}), then folds accepted merges back into the pool for the next round. Rounds stop
 once one produces no further reduction in pool size, or a fixed round cap
 is reached.
 
@@ -273,7 +376,7 @@ orientations.
 
 For every canonical relation with more than one
 surface form, a single LLM call classifies each surface form against the
-canonical label as \emph{forward} or \emph{inverted}; triplets whose
+canonical label as \emph{forward} or \emph{inverted} (Listing~\ref{lst:relation-direction}); triplets whose
 original predicate was classified inverted have their subject and object
 types swapped before the next stage. This catches merged grammatical
 inverses.
@@ -314,5 +417,309 @@ This confidence is thresholded into \textsc{Hard}, \textsc{Soft}, and
 % TODO
 
 \bibliography{custom}
+
+\appendix
+
+\section{Prompt Templates}
+\label{sec:appendix-prompts}
+
+This appendix lists, verbatim, the system prompt template behind each of
+the six LLM calls the orchestrated pipeline makes (as shipped in
+\texttt{src/ontodisco/utils/prompts/}). Every multi-member candidate
+cluster, or candidate batch during hierarchy placement, is verified by
+exactly one call to the corresponding prompt below -- there is no
+majority voting or repeated-call reconciliation anywhere in the pipeline.
+
+\subsection{Typed Triplet Extraction}
+\label{sec:appendix-extraction}
+Used by the schema-free extractor (\S\ref{sec:extraction}) to produce the raw triplet stream $\mathcal{G}$ that every downstream stage operates on.
+
+\begin{lstlisting}[caption={System prompt for typed triplet extraction.}, label={lst:extraction}]
+You are an algorithm designed to extract structured knowledge from texts to build a Wikidata-like knowledge graph. A knowledge graph consists of **triplets** in the format (subject, relation, object), where:
+
+- **Subject**: A named entity or a concept that describes a group of people, events, or any abstract objects that serves as the source of the relation.
+- **Relation**: A Wikidata-style predicate that connects the subject and object.
+- **Object**: A named entity or a concept that describes a group of people, events, or any abstract objects that is related to the subject.
+
+Additionally, some triplets may have **qualifiers** that provide more context (e.g., date, place, or other attributes). Qualifiers should have relations and object like triplets do, but instead of subject their relation connects an object and the triplet qualifier belongs to. **Qualifiers must always be attached to a triplet** and never exist as standalone triplets.
+
+Keep the main triplet's **relation** general: fold any detail that could vary (measure, place, method, time, etc.) into a role-labeled qualifier rather than the relation text — and when several entities participate, keep only the most central as object, qualifier the rest.
+
+You will receive a text labeled **"Text:"**. Your task is to extract meaningful triplets that represent factual relationships.
+
+### Output Format
+Return only triplets in **JSON format** as a list of dictionaries, where each dictionary contains:
+- "subject": Subject entity.
+- "relation": Relation connecting subject and object.
+- "object": Object entity.
+-  "qualifiers": List of dictionaries, where each dictionary contains:
+    - "relation": Relation connecting triplet and object,
+    - "object": Object entity connected to the main triplet
+- "subject_type": a class that describes the subject
+- "object_type": a class that describes the object
+
+NO additional text, NO "```" in json, return ONLY triplets in JSON format.
+
+
+<example>
+### Input:
+  Text: "Marie Curie (7 November 1867 - 4 July 1934) was a physicist and chemist who conducted pioneering research on radioactivity. She received the Nobel Prize in Physics in 1903 and the Nobel Prize in Chemistry in 1911.
+### Output:
+    {
+        "triplets":
+        [
+            {
+                "subject": "Marie Curie",
+                "relation": "date of birth",
+                "object": "7 November 1867",
+                "qualifiers": [],
+                "subject_type": "human",
+                "object_type": "date"
+            },
+            {
+                "subject": "Marie Curie",
+                "relation": "date of death",
+                "object": "4 July 1934",
+                "qualifiers": [],
+                "subject_type": "human",
+                "object_type": "date"
+            },
+            {
+                "subject": "Marie Curie",
+                "relation": "occupation",
+                "object": "physicist",
+                "qualifiers": [],
+                "subject_type": "human",
+                "object_type": "profession"
+            },
+            {
+                "subject": "Marie Curie",
+                "relation": "occupation",
+                "object": "chemist",
+                "qualifiers": [],
+                "subject_type": "human",
+                "object_type": "profession"
+            },
+            {
+                "subject": "Marie Curie",
+                "relation": "field of work",
+                "object": "radioactivity",
+                "qualifiers": [],
+                "subject_type": "human",
+                "object_type": "physical phenomenon"
+            },
+            {
+                "subject": "Marie Curie",
+                "relation": "award received",
+                "object": "Nobel Prize in Physics",
+                "qualifiers": [{"relation": "point in time", "object": '1903'}],
+                "subject_type": "human",
+                "object_type": "award"
+            },
+            {
+                "subject": "Marie Curie",
+                "relation": "award received",
+                "object": "Nobel Prize in Chemistry",
+                "qualifiers": [{"relation": "point in time", "object": "1911"}],
+                "subject_type": "human",
+                "object_type": "award"
+            }
+        ]
+    }
+
+</example>
+\end{lstlisting}
+
+\subsection{Relation Cluster Verification}
+\label{sec:appendix-cluster-relations}
+Used during relation canonicalization (\S\ref{sec:relation-dedup}) to adjudicate a merge/split decision for one HDBSCAN candidate cluster of raw relation surface forms.
+
+\begin{lstlisting}[caption={System prompt for relation cluster merge/split verification.}, label={lst:cluster-relations}]
+You are an ontology engineer. Below is a group of relation labels that have been clustered together based on semantic similarity.
+
+Your task:
+1. Decide whether ALL labels refer to the SAME conceptual relation.
+2. If yes: choose the BEST canonical label (most specific, most common in the field).
+3. If no: split the group into sub-groups of labels that DO refer to the same relation,  and for each sub-group give a canonical label.
+
+Return ONLY valid JSON (no explanation, no markdown), using this format:
+
+If merging all into one relation:
+{"decision": "merge", "groups": [{"canonical_label": "...", "members": ["...", ...]}]}
+
+If splitting into multiple relations:
+{"decision": "split", "groups": [{"canonical_label": "...", "members": ["...", ...]}, ...]}"""
+\end{lstlisting}
+
+\subsection{Entity-Type Cluster Verification}
+\label{sec:appendix-cluster-entity-types}
+Used during type canonicalization (\S\ref{sec:type-dedup}) to adjudicate a merge/split decision for one candidate cluster of raw entity-type labels, including the hyponymy (``kind of'') test discussed in \S\ref{sec:type-dedup}.
+
+\begin{lstlisting}[caption={System prompt for entity-type cluster merge/split verification, including the hyponymy guard.}, label={lst:cluster-entity-types}]
+You are an ontology engineer. Below is a group of entity type labels that have been clustered together based on semantic similarity. Some candidates may be annotated with "(context: ...)", describing which relations they tend to appear as the subject/object of in the corpus.
+
+Your task:
+1. Decide whether ALL labels refer to the SAME conceptual type.
+2. If yes: choose the BEST canonical label (most specific, most common in the field).
+3. If no: split the group into sub-groups of labels that DO refer to the same type,  and for each sub-group give a canonical label.
+
+CRITICAL TEST for step 1 -- two labels are the SAME type only if they are simply
+two names for the identical concept, interchangeable in any sentence. Before
+merging, apply this test: can you naturally say "an X is a kind of Y" (or "a Y,
+specifically an X")? If so, they are NOT the same type -- X is a more specific
+type and Y is a more general one, and they MUST be split into separate groups,
+even though they are obviously related and even though they may share almost
+all the same context relations. For example: "documentary film" is a kind of
+"film" -> split, never merge, regardless of how similar their contexts look.
+"movie" and "film" are just two names for the same thing, with no "kind of"
+relationship between them -> merge. Heavy context/relation overlap is expected
+and NORMAL for a specific type and its general type (a documentary film
+participates in almost every relation "film" does) -- it is NOT by itself
+evidence for merging; the "kind of" test always takes priority over context
+similarity. When genuinely unsure whether two labels are identical or in a
+"kind of" relationship, prefer splitting: a missed merge can still be corrected
+later, but a wrong merge silently and permanently destroys the distinction.
+
+Contexts remain useful evidence for the OPPOSITE case: if two labels look
+similar but their contexts share no relations in common at all, prefer
+splitting them into different (likely unrelated or homonymous) types.
+
+Return ONLY valid JSON (no explanation, no markdown), using this format:
+
+If merging all into one type:
+{"decision": "merge", "groups": [{"canonical_label": "...", "members": ["...", ...]}]}
+
+If splitting into multiple types:
+{"decision": "split", "groups": [{"canonical_label": "...", "members": ["...", ...]}, ...]}"""
+\end{lstlisting}
+
+\subsection{Hierarchy Placement (Pairwise Action)}
+\label{sec:appendix-hierarchy-pairwise}
+Used by hierarchy induction (\S\ref{sec:hierarchy-induction}) to resolve how one focal type relates to a batch of similarity-ranked candidates -- the four-way decision (\emph{parent}, \emph{child}, \emph{same\_concept}, \emph{same\_class}) plus \emph{none} described in \S\ref{sec:hierarchy-induction}.
+
+\begin{lstlisting}[caption={System prompt for per-node hierarchy placement decisions.}, label={lst:hierarchy-pairwise}]
+You are an ontology engineer. You are given ONE new/focal type and a short list of
+EXISTING candidate types. Decide how the focal type relates to AT MOST ONE of the
+candidates -- if none of them relate to it in a meaningful hierarchical way, say so.
+
+Some types are annotated with "(context: ...)", listing the canonical relations they
+most often participate in -- use this as evidence, not as ground truth.
+
+IMPORTANT: candidates (and the focal type) may themselves be abstractions formed
+earlier in this same process (not raw corpus surface forms) -- treat them exactly
+like any other candidate.
+
+Choose EXACTLY ONE of these five relations:
+
+1. "parent" -- ONE candidate is a more general type that subsumes the focal type
+   (focal type IS-A candidate). Name that one candidate.
+2. "child" -- the focal type is a more general type that subsumes ONE OR MORE of
+   the candidates (each named candidate IS-A focal type). Use this when the focal
+   type should become the parent of one or more of the listed candidates. If more
+   than one candidate belongs under the focal type, name ALL of them together in
+   this single response -- do not report only one and rely on a later call to
+   catch the rest, since a later call may never re-examine this same candidate.
+3. "same_concept" -- the focal type and ONE candidate are the IDENTICAL concept,
+   just worded differently (e.g. "vehicle" / "means of transport"). Not a
+   hierarchy relationship -- they should be merged into one. Name that one
+   candidate.
+4. "same_class" -- the focal type and ONE candidate are neither parent, child,
+   nor identical, but they are plausible SIBLINGS that should share a new,
+   currently-nonexistent parent (e.g. "war film" and "action film" both being
+   kinds of film genre). Invent a short canonical label and a one-sentence
+   definition for that new shared parent. Name that one candidate.
+5. "none" -- none of the candidates have any of the above relations to the focal
+   type.
+
+RULES:
+- Pick the single BEST-fitting relation, if any -- do not force a relation onto a
+  candidate that's merely superficially similar.
+- For every relation except "child", use "candidate": a single label string
+  naming which ONE candidate it applies to (omitted/ignored for "none").
+- For "child" ONLY, use "candidates": a JSON list of label strings, even if only
+  one candidate applies -- e.g. "candidates": ["biographical film"] for one,
+  "candidates": ["biographical film", "war film"] for two.
+- "confidence" is a plain JSON number between 0.0 and 1.0 (e.g. 0.9, 0.75, 1, 0) --
+  NEVER a word ("high"), a spelled-out number ("zero point nine"), or a fraction
+  ("9/10").
+- Only "same_class" needs "new_parent_label"/"new_parent_definition" -- omit them
+  for every other relation.
+
+Return ONLY valid JSON (no explanation, no markdown), using one of these formats:
+{{"relation": "parent", "candidate": "film", "confidence": 0.9}}
+{{"relation": "child", "candidates": ["biographical film"], "confidence": 0.85}}
+{{"relation": "child", "candidates": ["biographical film", "war film"], "confidence": 0.85}}
+{{"relation": "same_concept", "candidate": "motion picture", "confidence": 0.9}}
+{{"relation": "same_class", "candidate": "action film", "new_parent_label": "genre film", "new_parent_definition": "A film classified primarily by its genre or style.", "confidence": 0.8}}
+{{"relation": "none", "confidence": 0.0}}
+\end{lstlisting}
+
+\subsection{Entity-Name Cluster Verification}
+\label{sec:appendix-cluster-entity-names}
+Used during entity deduplication (\S\ref{sec:entity-dedup}) to adjudicate a merge/split decision for one candidate cluster of compound \texttt{name~[type]} entity mentions, within one parent-gated partition.
+
+\begin{lstlisting}[caption={System prompt for entity-name cluster merge/split verification.}, label={lst:cluster-entity-names}]
+You are a knowledge graph engineer. Below is a group of entity mentions, each in the format "name [type]". These have been clustered together based on embedding similarity.
+
+Your task:
+1. Decide which mentions refer to the SAME real-world entity.
+2. Group mentions of the same entity together.
+3. For each group, choose the BEST canonical name — the most complete, unambiguous form of the entity name. The canonical name must be JUST the entity name, WITHOUT the [type] bracket.
+4. Each group's "members" array must contain the EXACT compound strings as provided (including the [type] part).
+
+IMPORTANT RULES:
+- Two mentions with DIFFERENT types usually refer to DIFFERENT entities (e.g., "Paris [city]" vs "Paris [person]" are two different entities).
+- Two mentions with SIMILAR types may refer to the same entity (e.g., "Christopher Nolan [film director]" and "Chris Nolan [filmmaker]" are the same person).
+- Abbreviations, nicknames, and partial names should be merged with their full form ONLY if the type context supports it.
+- When in doubt, keep entities SEPARATE (prefer precision over recall).
+
+Return ONLY valid JSON (no explanation, no markdown):
+{"groups": [{"canonical_label": "<just the name>", "members": ["<name [type]>", ...]}, ...]}
+\end{lstlisting}
+
+\subsection{Relation-Direction Classification}
+\label{sec:appendix-relation-direction}
+Used by constraint induction's Stage~1 (\S\ref{sec:constraints}) to classify each raw surface form merged into a canonical relation as \emph{forward} or \emph{inverted} relative to that relation's own canonical direction, ahead of domain/range constraint mining.
+
+\begin{lstlisting}[caption={System prompt for relation-direction (forward/inverted) classification.}, label={lst:relation-direction}]
+You are an ontology engineer resolving relation directionality.
+
+Below is a canonical relation (its chosen representative label) and the full list of raw
+predicate surface forms that were merged into it during relation canonicalization. Surface forms
+are merged when they denote the same underlying relationship between two entities, INCLUDING
+cases where one form is the grammatical passive/inverse of another (e.g. "directed" and "was
+directed by" describe the same relationship, just told with subject and object swapped).
+
+Your task: classify EACH surface form relative to the canonical label's own direction, using
+exactly one of:
+
+1. "forward" — this surface form keeps the same subject/object roles as the canonical label.
+   Example: canonical "directed", surface form "helmed" -> "forward" (same roles: person directs
+   film).
+
+2. "inverted" — this surface form swaps subject and object relative to the canonical label: what
+   is the SUBJECT under the canonical label becomes the OBJECT under this surface form, and vice
+   versa. Example: canonical "directed" (subject=director, object=film), surface form "was
+   directed by" -> "inverted" (under this form, the film is the grammatical subject and the
+   director the object).
+
+The canonical label itself is always "forward" by definition — it is the reference direction
+everything else is judged against.
+
+Base this purely on grammatical/semantic role structure, not on which surface form is more
+frequent or "sounds more natural" — frequency has nothing to do with direction.
+
+Return ONLY valid JSON (no explanation, no markdown), using this format:
+{
+  "labels": {
+    "directed": "forward",
+    "was directed by": "inverted",
+    "helmed": "forward"
+  }
+}
+
+Every surface form given to you must appear as a key in "labels", with exactly one of "forward"
+or "inverted" as its value. Do not invent surface forms that were not given to you.
+\end{lstlisting}
 
 \end{document}
