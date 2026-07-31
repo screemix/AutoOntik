@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import openai
 
 # import os
@@ -13,6 +15,7 @@ import logging
 import sys
 import json
 import re
+import threading
 from pathlib import Path
 from typing import Dict, List, Union, Optional
 import tenacity
@@ -75,6 +78,9 @@ class LLMTripletExtractor:
                 "triplet_extraction": "prompt_1_with_types_and_qualifiers.txt",
                 "cluster_entity_types": "cluster_entity_types.txt",
                 "cluster_entity_names": "cluster_entity_names.txt",
+                "cluster_relations": "cluster_relations.txt",
+                "hierarchy_pairwise_action": "hierarchy_pairwise_action.txt",
+                "relation_direction": "relation_direction.txt",
             }
 
         # Load all prompts (paths may include subfolders, e.g. triplet_extraction/foo.txt)
@@ -93,6 +99,12 @@ class LLMTripletExtractor:
         self.prompt_tokens_num = 0
         self.completion_tokens_num = 0
         self.current_cost = 0
+        # get_completion() is called from multiple threads once dedup_base's
+        # verify_clusters_with_llm / hierarchy_induction's band placement run
+        # concurrently -- the plain `+=` below is a read-modify-write across
+        # three attributes and isn't atomic under the GIL, so concurrent
+        # callers can lose updates without this lock.
+        self._token_lock = threading.Lock()
         self.save_messages = save_messages
         self._refine_attempt = 0
         self._prev_error = None  # store previous exception
@@ -110,32 +122,47 @@ class LLMTripletExtractor:
 
     def extract_json(self, text: str) -> Union[dict, list, str]:
         """Extract JSON from text, handling both code blocks and inline JSON."""
-        patterns = [
-            r"```json\s*(\{.*?\}|\[.*?\])\s*```",  # JSON in code blocks
-            r"(\{.*?\}|\[.*?\])",  # Inline JSON
-        ]
+        fenced_pattern = r"```json\s*(\{.*?\}|\[.*?\])\s*```"  # JSON in code blocks
+
+        logger.log(logging.DEBUG, "LLM Output: %s", text)
 
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             pass
 
-        for pattern in patterns:
-            match = re.search(pattern, text, re.DOTALL)
-            if match:
-                try:
-                    return json.loads(match.group(1))
-                except json.JSONDecodeError:
-                    logger.error("Failed to parse JSON: %s", text)
+        match = re.search(fenced_pattern, text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                logger.error("Failed to parse fenced JSON block: %s", text)
+
+        # Inline JSON (no code fence): `(\{.*?\}|\[.*?\])` used to be tried
+        # here too, but a non-greedy brace match has nothing forcing it to
+        # backtrack past the FIRST closing brace it finds -- for nested
+        # JSON (e.g. {"triplets": [{...}, {...}]}), that's the first
+        # triplet's closing brace, not the outer object's, so the captured
+        # substring was truncated and json.loads always failed on it.
+        # json.JSONDecoder.raw_decode() parses however much valid JSON
+        # starts at the given position and tells us where it ends, so it
+        # isn't fooled by nested braces the way the regex was.
+        start = next((i for i, ch in enumerate(text) if ch in "{["), None)
+        if start is not None:
+            try:
+                obj, _ = json.JSONDecoder().raw_decode(text, start)
+                return obj
+            except json.JSONDecodeError:
+                logger.error("Failed to parse inline JSON: %s", text)
 
         return text
 
-    # @retry(
-    #     wait=wait_random_exponential(multiplier=1, max=60),
-    #     before_sleep=before_sleep_log(logger, logging.ERROR),
-    #     stop=stop_after_attempt(5),
-    # )
-    @tenacity.retry(stop=stop_never, reraise=True)
+    @retry(
+        wait=wait_random_exponential(multiplier=1, max=60),
+        before_sleep=before_sleep_log(logger, logging.ERROR),
+        stop=stop_after_attempt(5),
+    )
+    # @tenacity.retry(stop=stop_after_attempt(5), reraise=True)
     def get_completion(
         self, system_prompt: str, user_prompt: str, transform_to_json: bool = True
     ) -> Union[dict, list, str]:
@@ -154,12 +181,13 @@ class LLMTripletExtractor:
         response = self.client.chat.completions.create(
             model=self.model, messages=messages, temperature=0
         )
-        self.completion_tokens_num += response.usage.completion_tokens
-        self.prompt_tokens_num += response.usage.prompt_tokens
-        self.current_cost += (
-            response.usage.completion_tokens * self.output_price
-            + response.usage.prompt_tokens * self.input_price
-        )
+        with self._token_lock:
+            self.completion_tokens_num += response.usage.completion_tokens
+            self.prompt_tokens_num += response.usage.prompt_tokens
+            self.current_cost += (
+                response.usage.completion_tokens * self.output_price
+                + response.usage.prompt_tokens * self.input_price
+            )
 
         content = response.choices[0].message.content.strip()
         logger.debug("Output content: %s\n%s", str(content), "-" * 100)
@@ -203,10 +231,36 @@ class LLMTripletExtractor:
             if attempt > self.MAX_ATTEMPTS:
                 raise e
         
-    def verify_entity_type_cluster_with_llm(self, members: list[str]) -> list[tuple[str, list[str]]]:
-        """Verify clusters with LLM."""
+    def verify_cluster_with_llm(
+        self, members: list[str], surface_form_type='entity_type',
+        member_context: Optional[Dict[str, str]] = None,
+    ) -> list[tuple[str, list[str]]]:
+        """Verify clusters with LLM.
+
+        member_context: optional label -> relational-context evidence string
+        (e.g. "often appears as object of: directed, starred in"), rendered
+        alongside each candidate so the LLM has concrete evidence for merge/
+        split decisions beyond surface-form similarity.
+        """
+        if surface_form_type == 'entity_type':
+            system_prompt = self.prompts["cluster_entity_types"]
+        elif surface_form_type == 'entity':
+            system_prompt = self.prompts["cluster_entity_names"]
+        elif surface_form_type == 'relation':
+            system_prompt = self.prompts["cluster_relations"]
+        else:
+            raise Exception("Unknown surface form type")
+
+        if member_context:
+            candidates_str = ", ".join(
+                f"{m} (context: {member_context[m]})" if member_context.get(m) else m
+                for m in members
+            )
+        else:
+            candidates_str = ", ".join(members)
+
         response = self.get_completion(
-            system_prompt=self.prompts["cluster_entity_types"], user_prompt=f'Candidates: {", ".join(members)}')
+            system_prompt=system_prompt, user_prompt=f'Candidates: {candidates_str}')
 
         logger.log(logging.DEBUG, f"Input: {members}")
         logger.log(logging.DEBUG, f"Response: {response}")
@@ -221,28 +275,118 @@ class LLMTripletExtractor:
             groups = response.get("merged", []) or response.get("split", [])
 
         return groups
-    
-            
-    def verify_entity_name_cluster_with_llm(self, members: list[str]) -> list[tuple[str, list[str]]]:
-        """Verify clusters with LLM."""
-        response = self.get_completion(
-            system_prompt=self.prompts["cluster_entity_names"], user_prompt=f'Candidates: {", ".join(members)}')
 
-        logger.log(logging.DEBUG, f"Input: {members}")
+    def resolve_hierarchy_relation(
+        self, focal_label: str, candidate_labels: list[str],
+        focal_context: str = "", candidate_context: Optional[Dict[str, str]] = None,
+    ) -> dict:
+        """Ask the LLM how one focal type relates to a batch of existing
+        candidate types (see hierarchy_induction.py's
+        _resolve_with_batched_escalation, which calls this once per
+        similarity-ranked batch of candidates).
+
+        Returns a dict with "relation" in
+        {"parent", "child", "same_concept", "same_class", "none"}. For every
+        relation except "child", the chosen candidate is under "candidate"
+        (a single label string, omitted/ignored for "none"). For "child",
+        the focal type may subsume MORE THAN ONE candidate at once (CLAUDE.md
+        §16.2.2's "return a set, not a single child" requirement -- without
+        this, a focal node that should retroactively absorb two existing
+        siblings would only catch one per placement call, since nothing
+        guarantees a later call ever re-examines the one left behind) --
+        normalized here into "candidates" (always a list), regardless of
+        whether the LLM used the singular "candidate" or plural "candidates"
+        key in its raw JSON.
+        Also includes "confidence", and -- only for "same_class" --
+        "new_parent_label"/"new_parent_definition".
+        Returns {"relation": "none"} on any unparseable response, never raises.
+        """
+        system_prompt = self.prompts["hierarchy_pairwise_action"]
+
+        focal_str = focal_label
+        if focal_context:
+            focal_str = f"{focal_label} (context: {focal_context})"
+
+        if candidate_context:
+            candidates_str = ", ".join(
+                f"{c} (context: {candidate_context[c]})" if candidate_context.get(c) else c
+                for c in candidate_labels
+            )
+        else:
+            candidates_str = ", ".join(candidate_labels)
+
+        user_prompt = f"Focal type: {focal_str}\nExisting candidates: {candidates_str}"
+
+        try:
+            response = self.get_completion(system_prompt=system_prompt, user_prompt=user_prompt)
+        except Exception:
+            logger.exception("resolve_hierarchy_relation: LLM call failed")
+            return {"relation": "none"}
+
+        logger.log(logging.DEBUG, f"Input: focal={focal_label!r} candidates={candidate_labels!r}")
         logger.log(logging.DEBUG, f"Response: {response}")
 
-        if isinstance(response, str):
-            logger.warning("verify_entity_name_cluster_with_llm: LLM returned unparseable string")
-            return []
+        if not isinstance(response, dict):
+            logger.warning("resolve_hierarchy_relation: LLM returned unparseable response")
+            return {"relation": "none"}
 
-        groups = response.get("groups", [])
-        if not groups:
-            # Fallback: maybe the LLM used "merged"/"split" keys (variant format)
-            groups = response.get("merged", []) or response.get("split", [])
+        if response.get("relation") not in ("parent", "child", "same_concept", "same_class", "none"):
+            logger.warning(
+                "resolve_hierarchy_relation: LLM returned unknown relation %r; treating as none",
+                response.get("relation"),
+            )
+            return {"relation": "none"}
 
-        return groups
+        if response.get("relation") == "child":
+            raw_candidates = response.get("candidates")
+            if raw_candidates is None:
+                single = response.get("candidate")
+                raw_candidates = [single] if single else []
+            elif not isinstance(raw_candidates, list):
+                raw_candidates = [raw_candidates]
+            response = dict(response)
+            response["candidates"] = [str(c) for c in raw_candidates if c]
 
-    
+        return response
+
+    def classify_relation_direction(
+        self, canonical_label: str, surface_forms: list[str],
+    ) -> Dict[str, str]:
+        """
+        Classify each surface form merged into one canonical relation as
+        "forward" or "inverted" relative to canonical_label
+        (see constraints.py's direction-resolution stage for why this is
+        needed: relation canonicalization is role-blind, so a canonical
+        relation can silently pool a predicate with its grammatical
+        inverse).
+
+        Only worth calling when a canonical relation has more than one
+        surface form -- callers should treat a single-surface-form relation
+        as trivially "forward" without invoking this.
+        """
+        system_prompt = self.prompts["relation_direction"]
+        user_prompt = (
+            f'Canonical relation: "{canonical_label}"\n'
+            f"Surface forms: {json.dumps(surface_forms)}"
+        )
+
+        response = self.get_completion(system_prompt=system_prompt, user_prompt=user_prompt)
+
+        logger.log(logging.DEBUG, f"Input: {canonical_label} / {surface_forms}")
+        logger.log(logging.DEBUG, f"Response: {response}")
+
+        if isinstance(response, str) or not isinstance(response, dict):
+            logger.warning(
+                "classify_relation_direction: LLM returned unparseable response for %r",
+                canonical_label,
+            )
+            return {sf: "forward" for sf in surface_forms}
+
+        labels = response.get("labels", {})
+        # Defensively default any surface form the LLM omitted to "forward"
+        # (no swap applied) rather than dropping it.
+        return {sf: labels.get(sf, "forward") for sf in surface_forms}
+
     def calculate_cost(self) -> float:
         """Calculate the total cost of API usage."""
         return self.current_cost / 1e6
@@ -250,6 +394,24 @@ class LLMTripletExtractor:
     def calculate_used_tokens(self) -> int:
         """Calculate the total # of used tokens for generation"""
         return self.prompt_tokens_num, self.completion_tokens_num
+
+    def get_usage_snapshot(self) -> Dict[str, float]:
+        """Atomic (single-lock) read of the three running counters, for
+        callers that need a consistent point-in-time snapshot -- e.g.
+        pipeline.py diffing before/after a step to get that step's own
+        token usage, where reading the three attributes one at a time could
+        otherwise race against a concurrent get_completion() call landing
+        mid-read (see the lock added in get_completion() itself)."""
+        with self._token_lock:
+            prompt_tokens = self.prompt_tokens_num
+            completion_tokens = self.completion_tokens_num
+            cost = self.current_cost
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+            "cost_usd": cost / 1e6,
+        }
 
     def reset_tokens(self):
         """Reset the total # of used tokens for generation"""

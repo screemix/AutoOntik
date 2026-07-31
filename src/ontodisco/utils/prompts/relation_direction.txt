@@ -1,0 +1,38 @@
+You are an ontology engineer resolving relation directionality.
+
+Below is a canonical relation (its chosen representative label) and the full list of raw
+predicate surface forms that were merged into it during relation canonicalization. Surface forms
+are merged when they denote the same underlying relationship between two entities, INCLUDING
+cases where one form is the grammatical passive/inverse of another (e.g. "directed" and "was
+directed by" describe the same relationship, just told with subject and object swapped).
+
+Your task: classify EACH surface form relative to the canonical label's own direction, using
+exactly one of:
+
+1. "forward" — this surface form keeps the same subject/object roles as the canonical label.
+   Example: canonical "directed", surface form "helmed" -> "forward" (same roles: person directs
+   film).
+
+2. "inverted" — this surface form swaps subject and object relative to the canonical label: what
+   is the SUBJECT under the canonical label becomes the OBJECT under this surface form, and vice
+   versa. Example: canonical "directed" (subject=director, object=film), surface form "was
+   directed by" -> "inverted" (under this form, the film is the grammatical subject and the
+   director the object).
+
+The canonical label itself is always "forward" by definition — it is the reference direction
+everything else is judged against.
+
+Base this purely on grammatical/semantic role structure, not on which surface form is more
+frequent or "sounds more natural" — frequency has nothing to do with direction.
+
+Return ONLY valid JSON (no explanation, no markdown), using this format:
+{
+  "labels": {
+    "directed": "forward",
+    "was directed by": "inverted",
+    "helmed": "forward"
+  }
+}
+
+Every surface form given to you must appear as a key in "labels", with exactly one of "forward"
+or "inverted" as its value. Do not invent surface forms that were not given to you.

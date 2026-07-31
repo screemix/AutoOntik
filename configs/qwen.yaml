@@ -1,0 +1,68 @@
+# configs/qwen.yaml
+#
+# Config for src/ontodisco/pipeline.py -- covers all five orchestrated steps:
+# Relation Canonicalization, Type Canonicalization, Hierarchy Induction,
+# Entity Deduplication, Constraint Induction. Extraction / Serialization are
+# not implemented yet and have no config section here.
+
+corpus_id: "my_corpus"
+input_path: "./data/musique_initial_triplets.jsonl"   # JSONL file, one raw triplet dict per line
+output_dir: "./output"
+
+# ── LLM client ────────────────────────────────────────────────────────────────
+llm:
+  model: "Qwen/Qwen3-Next-80B-A3B-Instruct"
+  api_key_env: "AIRI_KEY"       # name of the env var holding the key -- never put the key itself here
+  base_url: "https://inference.airi.net:46783/v1"
+
+# ── Embedding client ──────────────────────────────────────────────────────────
+embedding:
+  contriever_model: "facebook/contriever"
+  device: null                        # "cuda" | "cpu" | null (auto)
+  embed_batch_size: 64
+
+# ── Relation Canonicalization ─────────────────────────────────────────────────
+relation_canonicalization:
+  similarity_threshold: 0.75
+  max_merge_rounds: 5
+  max_parallel_workers: 8      # thread pool size for concurrent LLM cluster verification
+  max_cluster_size: 40         # clusters over this size are split into sub-batches + stitched back
+                                # together, instead of one oversized (slow, truncation-prone) LLM call
+
+# ── Type Canonicalization ─────────────────────────────────────────────────────
+type_canonicalization:
+  hac_threshold: 0.75          # HDBSCAN cluster_selection_epsilon = 1 - this (name kept for compatibility)
+  relation_context_top_k: 5
+  max_merge_rounds: 5          # same convergence loop as relation_canonicalization above
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+# ── Hierarchy Induction ───────────────────────────────────────────────────────
+hierarchy:
+  relation_signature_weighting: "ppmi"
+  weeds_containment_threshold: 0.75
+  priority_band_tolerance: 10  # nodes within this many in-degree units of a band's top score share it
+  seed_roots: []              # e.g. ["Endurant", "Perdurant", "Quality", "Abstract"] for a DOLCE-seeded run
+  candidate_batch_size: 30
+  max_escalation_batches: 3
+  max_depth: 50                # null (YAML) / None (Python) means uncapped -- see hierarchy_induction.HierarchyConfig
+  embed_batch_size: 64
+  context_top_k: 5
+  max_parallel_workers: 8      # thread pool size for band 2+ (band 1 always runs sequentially)
+
+# ── Entity Deduplication + Class Assignment ───────────────────────────────────
+# Candidates are partitioned by shared immediate parent in the TypeHierarchy
+# first, then clustered with HDBSCAN within each partition.
+entity_canonicalization:
+  similarity_threshold: 0.85
+  max_merge_rounds: 5
+  max_parallel_workers: 8      # thread pool size for concurrent LLM cluster verification
+  max_cluster_size: 40
+
+# ── Domain/Range Constraint Induction ─────────────────────────────────────────
+# Confidence (PCA-style) thresholds applied once, at the very end, to the
+# direction-corrected, hierarchy-generalized (domain, range) pairs.
+constraints:
+  hard_threshold: 0.90
+  soft_threshold: 0.50
+  hint_threshold: 0.20

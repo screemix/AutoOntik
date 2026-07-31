@@ -2,17 +2,48 @@
 Entity Name Canonicalization via FAISS Nearest-Neighbor Search + LLM Verification
 ==================================================================================
 
-Merges entity surface forms ("Nolan", "Christopher Nolan", "C. Nolan")
-into canonical entities.
+Merges entity surface forms ("Nolan", "Christopher Nolan", "C. Nolan") into
+canonical entities, and assigns each canonical entity its set of canonical
+type_ids as a byproduct of clustering -- no separate "class assignment" pass
+is needed.
 
-Entity identity is (name, type), not just name. Each triplet mention
-produces a compound label "name [type]" that flows through the entire
-pipeline. This prevents merging homonymous entities with different types
-(e.g. "Paris [city]" vs "Paris [person]").
+Entity identity is (name, type), not just name: each triplet mention produces
+a compound label "name [canonical type label]" that flows through embedding
+and clustering. This prevents merging homonymous entities with different
+types (e.g. "Paris [city]" vs "Paris [person]").
 
-Uses FAISS to retrieve top-k nearest neighbors per entity across the full
-index (no hard partitioning), then union-find over similar pairs to form
-candidate clusters for LLM verification.
+Must run AFTER type_dedup.py and hierarchy_induction.py (unlike relation/type
+dedup, which only need each other):
+  - Using the already-canonicalized type in the compound label is what makes
+    class assignment fall out for free during clustering.
+  - The induced TypeHierarchy gates candidate merges by immediate-parent
+    membership (see _parent_key): two mentions are only clusterable if their
+    types are identical, or siblings under the same parent. Nothing else
+    counts -- not grandparent/grandchild, not "any shared ancestor". This is
+    a hard, symbolic gate applied by PARTITIONING candidates by parent key
+    BEFORE clustering, not an upfront embedding-space partition -- so it
+    doesn't reintroduce the recall loss of the KMeans hard-blocking approach
+    this module used before (see git history): that approach silently
+    dropped true synonym pairs that happened to fall into different
+    embedding-space blocks. Gating on type-hierarchy parentage is exact and
+    symbolic rather than an approximate embedding-space partition, so
+    genuine name-synonym pairs are never dropped for a reason unrelated to
+    their type, and partitioning first also means HDBSCAN only ever compares
+    candidates that could possibly merge, rather than the whole vocabulary at
+    once.
+
+Within each parent partition, merging runs for SEVERAL ROUNDS
+(_run_partition_merge_rounds) rather than a single embed -> cluster -> LLM
+verify pass: a merge in round N can pull a canonical entity's embedding
+close enough to a fourth surface form to only become clusterable in round
+N+1 (e.g. "Chris Nolan" + "C. Nolan" merge into "Christopher Nolan" in round
+1, which is then a closer embedding match to "Christopher J. Nolan" than
+either original form was alone), and a single HDBSCAN cut can simply fail to
+chain 3+ near-duplicates together that a second pass over the now-smaller
+pool catches. Each round re-embeds the CURRENT pool (already-merged entities
+plus untouched singletons), re-clusters, and re-verifies with the LLM;
+rounds stop as soon as one produces no further reduction in pool size (nothing
+left to merge), or after `max_merge_rounds` rounds, whichever comes first.
 """
 
 from __future__ import annotations
@@ -21,26 +52,29 @@ import re
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
-from pathlib import Path
-
-import numpy as np
-import faiss
+from typing import TYPE_CHECKING, Optional
 
 from src.ontodisco.utils.dedup_base import (
     CanonicalItem,
     ContrieverEmbedder,
     DeduplicationResult,
-    deduplicate,
+    cluster_hdbscan,
     normalize_label,
+    verify_clusters_with_llm,
 )
+from src.ontodisco.hierarchy_induction import lowest_common_ancestor
+
+if TYPE_CHECKING:
+    from src.ontodisco.type_dedup import TypeDeduplicationResult
+    from src.ontodisco.hierarchy_induction import TypeHierarchy
 
 logger = logging.getLogger(__name__)
 
 _COMPOUND_RE = re.compile(r'^(.+?)\s*\[(.+?)\]$')
 
 
-def _make_compound(name: str, type_: str) -> str:
-    return f"{name} [{type_}]"
+def _make_compound(name: str, type_label: str) -> str:
+    return f"{name} [{type_label}]"
 
 
 def _parse_compound(label: str) -> tuple[str, str]:
@@ -51,104 +85,151 @@ def _parse_compound(label: str) -> tuple[str, str]:
 
 
 def _normalize_compound(label: str) -> str:
-    name, type_ = _parse_compound(label)
+    name, type_label = _parse_compound(label)
     norm_name = normalize_label(name)
-    if type_:
-        norm_type = normalize_label(type_)
+    if type_label:
+        norm_type = normalize_label(type_label)
         return f"{norm_name} [{norm_type}]"
     return norm_name
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  FAISS Nearest-Neighbor Clustering
+#  HDBSCAN Clustering, Gated by Shared Immediate Parent
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _union_find_from_pairs(
-    n: int,
-    pairs: list[tuple[int, int]],
-) -> np.ndarray:
+def _parent_key(type_id: str, hierarchy: "TypeHierarchy") -> tuple:
+    """A key identifying type_id's "sibling group": ("parent", parent_id)
+    for non-root types, ("self", type_id) for roots.
+
+    Two types are only eligible to cluster together if this key agrees for
+    both -- i.e. they are literally the same type, or siblings under the
+    same parent. No other relatedness counts -- in particular, a root and
+    one of its own children must NOT match: using type_id itself as a root's
+    key (with no "self"/"parent" tag) would make a root's key collide with
+    its child's parent_id, incorrectly treating parent/child as siblings.
     """
-    Build connected components from a sparse list of (i, j) pairs
-    using union-find with path compression and union by rank.
+    parents = hierarchy.parents.get(type_id)
+    if parents:
+        return ("parent", parents[0])
+    return ("self", type_id)
 
-    Returns array of integer cluster labels, shape (N,).
+
+@dataclass
+class _EntityPoolItem:
+    """One node in a parent-partition's merge pool: a (possibly already
+    merged) entity, tracked by its current display name plus a
+    representative type label (used ONLY to build embedding text and the
+    compound string shown to the LLM -- the entity's final type_ids come
+    from `normalized_members`, not from this single label) and the set of
+    original normalized compound labels folded into it so far."""
+    label: str
+    type_label: str
+    normalized_members: set[str] = field(default_factory=set)
+
+
+def _run_partition_merge_rounds(
+    unique_compound_labels: list[str],
+    embedder: ContrieverEmbedder,
+    llm_extractor,
+    *,
+    similarity_threshold: float,
+    embed_batch_size: int,
+    max_merge_rounds: int,
+    partition_type_label: str,
+    max_workers: int = 8,
+    max_cluster_size: int = 40,
+) -> list[tuple[str, set[str]]]:
     """
-    if n <= 1:
-        return np.zeros(n, dtype=int)
+    Repeatedly embed -> HDBSCAN-cluster -> LLM-verify the current pool of
+    entities within ONE parent partition (all candidates here already share
+    the hard parent-key gate -- see module docstring), folding merged groups
+    back into the pool each round, until a round produces no further
+    reduction in pool size or `max_merge_rounds` is reached.
 
-    parent = list(range(n))
-    rank = [0] * n
+    partition_type_label: the representative type label for this WHOLE
+    partition -- the parent's canonical_label for a ("parent", parent_id)
+    partition, or the type's own canonical_label for a ("self", type_id)
+    partition (see _parent_key / the caller). Every item merged in this
+    partition is either literally that one type already, or a sibling under
+    that exact parent, so this is always the correct "earliest common
+    parent" for any subset merged here -- no separate LCA walk needed.
 
-    def find(x: int) -> int:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(x: int, y: int) -> None:
-        px, py = find(x), find(y)
-        if px == py:
-            return
-        if rank[px] < rank[py]:
-            px, py = py, px
-        parent[py] = px
-        if rank[px] == rank[py]:
-            rank[px] += 1
-
-    for i, j in pairs:
-        union(i, j)
-
-    labels = np.array([find(i) for i in range(n)])
-    unique_roots = {r: idx for idx, r in enumerate(sorted(set(labels)))}
-    return np.array([unique_roots[labels[i]] for i in range(n)])
-
-
-def _cluster_faiss_nn(
-    embeddings: np.ndarray,
-    threshold: float = 0.85,
-    top_k: int = 50,
-) -> np.ndarray:
+    Returns a list of (canonical_label, {normalized compound members}) --
+    one entry per final entity surviving in this partition.
     """
-    Scalable clustering via FAISS nearest-neighbor search + union-find.
+    pool: list[_EntityPoolItem] = []
+    for compound in unique_compound_labels:
+        name, type_label = _parse_compound(compound)
+        pool.append(_EntityPoolItem(label=name, type_label=type_label,
+                                     normalized_members={compound}))
 
-    For each entity, retrieves top_k nearest neighbors from the full index
-    (no hard partitioning). Pairs above the cosine similarity threshold are
-    connected via union-find to form clusters.
+    for round_num in range(1, max_merge_rounds + 1):
+        if len(pool) < 2:
+            break
 
-    Embeddings must be L2-normalised (so inner product = cosine similarity).
+        texts = [f"{item.label} {item.type_label}" for item in pool]
+        embeddings = embedder.embed(texts, batch_size=embed_batch_size)
+        cluster_labels = cluster_hdbscan(embeddings, threshold=similarity_threshold)
 
-    Memory: O(N × top_k).  Time: O(N × top_k × log(N)) for index search.
-    """
-    n = len(embeddings)
+        clusters_by_str: dict[int, list[str]] = defaultdict(list)
+        str_to_index: dict[str, int] = {}
+        for idx, (item, cl) in enumerate(zip(pool, cluster_labels)):
+            compound_str = f"{item.label} [{item.type_label}]"
+            clusters_by_str[int(cl)].append(compound_str)
+            str_to_index[compound_str] = idx
+        clusters_by_str = dict(clusters_by_str)
 
-    if n <= 1:
-        return np.zeros(n, dtype=int)
+        if all(len(members) == 1 for members in clusters_by_str.values()):
+            logger.info("Partition merge round %d: no candidate clusters, stopping", round_num)
+            break
 
-    k = min(top_k, n)
-    emb = embeddings.astype(np.float32)
+        verified_groups = verify_clusters_with_llm(
+            clusters_by_str, llm_extractor, surface_form_type="entity",
+            max_workers=max_workers, max_cluster_size=max_cluster_size,
+        )
 
-    index = faiss.IndexFlatIP(emb.shape[1])
-    index.add(emb)
-    similarities, indices = index.search(emb, k)
+        next_pool: list[_EntityPoolItem] = []
+        for canonical_label, member_strs in verified_groups:
+            member_indices = [str_to_index[s] for s in member_strs if s in str_to_index]
+            if not member_indices:
+                continue
+            if len(member_indices) == 1:
+                # No merge happened for this member -- carry the pool item
+                # over UNCHANGED rather than trusting the echoed
+                # canonical_label: verify_clusters_with_llm never calls the
+                # LLM for singleton clusters, so canonical_label there is
+                # just the input compound string as-is (brackets included),
+                # not a real naming decision.
+                next_pool.append(pool[member_indices[0]])
+                continue
+            normalized_members: set[str] = set()
+            for idx in member_indices:
+                normalized_members |= pool[idx].normalized_members
+            # Keep the true label when every merged item already agrees (no
+            # ambiguity); only fall back to the partition's shared parent
+            # when merging genuine siblings with different type labels --
+            # never an arbitrary alphabetical pick (see docstring above).
+            merged_type_labels = {pool[idx].type_label for idx in member_indices}
+            representative_type = (
+                merged_type_labels.pop() if len(merged_type_labels) == 1 else partition_type_label
+            )
+            next_pool.append(_EntityPoolItem(
+                label=canonical_label.strip(),
+                type_label=representative_type,
+                normalized_members=normalized_members,
+            ))
 
-    pairs: list[tuple[int, int]] = []
-    for i in range(n):
-        for rank_pos in range(k):
-            j = int(indices[i, rank_pos])
-            sim = float(similarities[i, rank_pos])
-            if j != i and sim >= threshold:
-                pairs.append((i, j))
+        progressed = len(next_pool) < len(pool)
+        logger.info(
+            "Partition merge round %d: %d -> %d entities", round_num, len(pool), len(next_pool),
+        )
+        pool = next_pool
+        if not progressed:
+            break
+    else:
+        logger.info("Partition merge reached max_merge_rounds=%d, stopping", max_merge_rounds)
 
-    labels = _union_find_from_pairs(n, pairs)
-    n_clusters = int(labels.max()) + 1
-
-    logger.info(
-        "FAISS NN clustering: %d entities, top_k=%d, threshold=%.2f → "
-        "%d similar pairs → %d clusters",
-        n, k, threshold, len(pairs), n_clusters,
-    )
-
-    return labels
+    return [(item.label, item.normalized_members) for item in pool]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -157,8 +238,15 @@ def _cluster_faiss_nn(
 
 @dataclass
 class CanonicalEntity(CanonicalItem):
-    """One canonical entity after deduplication."""
-    type_labels: set[str] = field(default_factory=set)
+    """One canonical entity after deduplication, with its class assignment."""
+    type_ids: set[str] = field(default_factory=set)
+    primary_type_id: Optional[str] = None
+    # Single-representative-type convenience field on top of type_ids: the
+    # lowest common ancestor of type_ids in the induced TypeHierarchy (None
+    # if type_ids is empty, or if the observed types don't share one --
+    # disconnected trees of the hierarchy forest). type_ids stays the
+    # authoritative class assignment; this is derived from it, not a
+    # replacement for it.
 
     @property
     def entity_id(self) -> str:
@@ -167,7 +255,7 @@ class CanonicalEntity(CanonicalItem):
 
 @dataclass
 class EntityDeduplicationResult(DeduplicationResult):
-    """Full output of entity name canonicalization."""
+    """Full output of entity name canonicalization + class assignment."""
 
     @property
     def entities(self) -> dict[str, CanonicalEntity]:
@@ -190,18 +278,31 @@ class EntityDeduplicationResult(DeduplicationResult):
 #  Surface Form Collection
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _resolve_type_id(raw_type: str, type_vocab: "TypeDeduplicationResult") -> Optional[str]:
+    norm_type = normalize_label(raw_type)
+    return type_vocab.surface_to_id.get(norm_type) or type_vocab.surface_to_id.get(raw_type)
+
+
 def collect_entity_surface_forms(
     triplets: list[dict],
-) -> list[str]:
+    type_vocab: "TypeDeduplicationResult",
+) -> tuple[list[str], dict[str, str]]:
     """
-    Collect all entity surface forms from triplets as compound labels.
+    Collect all entity surface forms from triplets as compound labels
+    "name [canonical type label]", using the ALREADY-CANONICALIZED type
+    (type_dedup must run first). Mentions whose type doesn't resolve to a
+    known type_id (e.g. discarded as noise by type_dedup's min_type_freq)
+    are skipped -- the entity may still be canonicalized via its other,
+    resolvable mentions.
 
-    Each triplet mention with a non-empty type produces a "name [type]"
-    compound label. Mentions without a type are skipped.
-
-    Returns all compound labels (with duplicates).
+    Returns (all_compound_labels, type_id_by_normalized_compound): the
+    second dict maps each unique normalized compound label to the type_id
+    used to build it (built inline, since a given normalized compound
+    string is only ever produced from one (name, type_id) pair).
     """
     all_compound_labels: list[str] = []
+    type_id_by_normalized_compound: dict[str, str] = {}
+    skipped = 0
 
     for triplet in triplets:
         for name_key, type_key in [
@@ -213,14 +314,24 @@ def collect_entity_surface_forms(
             if not raw_name or not raw_type:
                 continue
 
-            all_compound_labels.append(_make_compound(raw_name, raw_type))
+            type_id = _resolve_type_id(raw_type, type_vocab)
+            if type_id is None:
+                skipped += 1
+                continue
+
+            canonical_type_label = type_vocab.types[type_id].canonical_label
+            compound = _make_compound(raw_name, canonical_type_label)
+            all_compound_labels.append(compound)
+            type_id_by_normalized_compound[_normalize_compound(compound)] = type_id
 
     logger.info(
-        "Collected %d compound entity mentions from %d triplets",
-        len(all_compound_labels), len(triplets),
+        "Collected %d compound entity mentions (%d unique) from %d triplets "
+        "(%d mentions skipped: type not resolvable in TypeVocabulary)",
+        len(all_compound_labels), len(type_id_by_normalized_compound),
+        len(triplets), skipped,
     )
 
-    return all_compound_labels
+    return all_compound_labels, type_id_by_normalized_compound
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -229,146 +340,161 @@ def collect_entity_surface_forms(
 
 def deduplicate_entities(
     triplets: list[dict],
+    type_vocab: "TypeDeduplicationResult",
+    hierarchy: "TypeHierarchy",
     llm_extractor,
     *,
     contriever_model: str = "facebook/contriever",
     similarity_threshold: float = 0.85,
-    faiss_top_k: int = 50,
     embed_batch_size: int = 64,
     device: str = None,
-    prompt_path: str = None,
+    max_merge_rounds: int = 5,
+    max_parallel_workers: int = 8,
+    max_cluster_size: int = 40,
 ) -> EntityDeduplicationResult:
     """
-    Full entity name deduplication with type-aware compound labels.
+    Full entity name deduplication with type-aware compound labels and
+    class assignment.
 
-    Uses FAISS nearest-neighbor search for scalable candidate generation:
-    each entity is compared against its top-k nearest neighbors across the
-    full index (no hard partitioning), then union-find groups similar
-    entities into clusters for LLM verification.
-
-    Entity mentions are represented as compound "name [type]" labels.
-    This ensures that homonymous entities with different types (e.g.
-    "Paris [city]" vs "Paris [person]") are never merged.
+    Must run AFTER type_dedup.py (needs canonical type_ids) and
+    hierarchy_induction.py (needs the induced TypeHierarchy to gate
+    candidate merges -- see module docstring).
 
     Args:
         triplets:             List of triplet dicts from extraction.
+        type_vocab:           TypeDeduplicationResult from type_dedup.py.
+        hierarchy:            TypeHierarchy from hierarchy_induction.py.
         llm_extractor:        LLMTripletExtractor instance.
         contriever_model:     HuggingFace model ID for Contriever.
         similarity_threshold: Cosine similarity threshold for merging (default 0.85).
-        faiss_top_k:          Number of nearest neighbors to retrieve per entity (default 50).
         embed_batch_size:     Batch size for Contriever encoding.
         device:               "cuda", "cpu", or None (auto).
-        prompt_path:          Path to entity_cluster_verify.txt. If None, uses default.
+        max_merge_rounds:     Max embed -> cluster -> LLM-verify passes run
+                              PER parent partition before moving on (see
+                              _run_partition_merge_rounds / module docstring).
+        max_parallel_workers: Thread pool size for concurrent LLM cluster
+                              verification calls within each partition's rounds.
+        max_cluster_size:     Size cap before a cluster is split into
+                              sub-batches + stitched back together (see
+                              dedup_base.verify_clusters_with_llm).
 
     Returns:
-        EntityDeduplicationResult with canonical entities and mappings.
+        EntityDeduplicationResult with canonical entities (each carrying its
+        assigned type_ids) and surface form mappings.
     """
-    all_compound_labels = collect_entity_surface_forms(triplets)
+    all_compound_labels, type_id_by_normalized_compound = collect_entity_surface_forms(
+        triplets, type_vocab,
+    )
 
-    def _entity_embedding_text(compound_label: str) -> str:
-        name, type_ = _parse_compound(compound_label)
-        return f"{name} {type_}" if type_ else name
+    # ── Normalisation stats (mirrors dedup_base.deduplicate()'s Step 1) ──────
+    normalized_to_raws: dict[str, set[str]] = defaultdict(set)
+    surface_form_counts: dict[str, int] = defaultdict(int)
+    count_per_normalized: dict[str, int] = defaultdict(int)
+    for label in all_compound_labels:
+        norm = _normalize_compound(label)
+        normalized_to_raws[norm].add(label)
+        surface_form_counts[label] += 1
+        count_per_normalized[norm] += 1
 
+    unique_labels = sorted(normalized_to_raws.keys())
+    logger.info("After normalisation: %d unique compound entity labels", len(unique_labels))
 
     embedder = ContrieverEmbedder(model_name=contriever_model, device=device)
 
-    def _build_entity(item_id, canonical_label, surface_forms, mention_count,
+    # ── Partition by parent-key (hard gate), then run merge rounds
+    #    independently WITHIN each partition ─────────────────────────────────
+    partitions: dict[tuple, list[str]] = defaultdict(list)
+    for norm_label in unique_labels:
+        type_id = type_id_by_normalized_compound[norm_label]
+        partitions[_parent_key(type_id, hierarchy)].append(norm_label)
+
+    all_verified_groups: list[tuple[str, list[str]]] = []
+    for partition_key, members in partitions.items():
+        if len(members) == 1:
+            all_verified_groups.append((members[0], members))
+            continue
+        # ("parent", parent_id) -> the shared parent's own label; ("self",
+        # type_id) -> that one type's own label (trivial -- every item in a
+        # self-partition already shares that exact type). Either way, this
+        # is the correct representative type for ANY subset merged within
+        # this partition (see _run_partition_merge_rounds docstring).
+        _, partition_type_id = partition_key
+        partition_type = type_vocab.types.get(partition_type_id)
+        partition_type_label = partition_type.canonical_label if partition_type else partition_type_id
+        partition_groups = _run_partition_merge_rounds(
+            members, embedder, llm_extractor,
+            similarity_threshold=similarity_threshold,
+            embed_batch_size=embed_batch_size,
+            max_merge_rounds=max_merge_rounds,
+            partition_type_label=partition_type_label,
+            max_workers=max_parallel_workers,
+            max_cluster_size=max_cluster_size,
+        )
+        for canonical_label, normalized_members in partition_groups:
+            all_verified_groups.append((canonical_label, sorted(normalized_members)))
+
+    logger.info(
+        "Entity merge rounds complete across %d parent-partitions: %d unique labels -> %d groups",
+        len(partitions), len(unique_labels), len(all_verified_groups),
+    )
+
+    # ── Build result (mirrors dedup_base.deduplicate()'s Step 5) ────────────
+    def _build_entity(item_id, canonical_label, surface_forms, count_per_normalized,
                       surface_form_counts):
-        all_types: set[str] = set()
+        assigned_type_ids: set[str] = set()
         for sf in surface_forms:
-            _, type_ = _parse_compound(sf)
-            if type_:
-                all_types.add(type_)
+            type_id = type_id_by_normalized_compound.get(_normalize_compound(sf))
+            if type_id:
+                assigned_type_ids.add(type_id)
+        primary_type_id = (
+            lowest_common_ancestor(assigned_type_ids, hierarchy) if assigned_type_ids else None
+        )
         return CanonicalEntity(
             item_id=item_id,
             canonical_label=canonical_label,
             surface_forms=surface_forms,
-            mention_count=mention_count,
+            count_per_normalized=count_per_normalized,
             surface_form_counts=surface_form_counts,
-            type_labels=all_types,
+            type_ids=assigned_type_ids,
+            primary_type_id=primary_type_id,
         )
 
-    def _cluster_fn(embeddings: np.ndarray) -> np.ndarray:
-        return _cluster_faiss_nn(
-            embeddings,
-            threshold=similarity_threshold,
-            top_k=faiss_top_k,
-        )
+    items: dict[str, CanonicalEntity] = {}
+    surface_to_id: dict[str, str] = {}
+    for idx, (canonical_label, members) in enumerate(all_verified_groups):
+        item_id = f"ent_{idx:05d}"
 
-    base_result = deduplicate(
-        all_labels=all_compound_labels,
-        llm_verifier=llm_extractor,
-        embedder=embedder,
-        normalizer=_normalize_compound,
-        embedding_text_fn=_entity_embedding_text,
-        cluster_fn=_cluster_fn,
-        embed_batch_size=embed_batch_size,
-        id_prefix="ent",
-        id_width=5,
-        build_item=_build_entity,
-    )
+        all_surface_forms: set[str] = set()
+        total_count = 0
+        for member in members:
+            all_surface_forms.update(normalized_to_raws.get(member, {member}))
+            all_surface_forms.add(member)
+            total_count += count_per_normalized.get(member, 0)
+
+        sorted_forms = sorted(all_surface_forms)
+        sf_counts = {sf: surface_form_counts.get(sf, 0) for sf in sorted_forms}
+
+        item = _build_entity(item_id, canonical_label, sorted_forms, total_count, sf_counts)
+        items[item_id] = item
+
+        for sf in all_surface_forms:
+            surface_to_id[sf] = item_id
+        surface_to_id[canonical_label] = item_id
+
+    num_canonical = len(items)
+    reduction = (1 - num_canonical / max(len(unique_labels), 1)) * 100
 
     logger.info(
-        "Entity deduplication complete: %d → %d canonical entities (%.1f%% reduction)",
-        base_result.num_raw, base_result.num_canonical, base_result.reduction_pct,
+        "Entity deduplication complete: %d -> %d canonical entities (%.1f%% reduction)",
+        len(unique_labels), num_canonical, reduction,
     )
 
     return EntityDeduplicationResult(
-        items=base_result.items,
-        surface_to_id=base_result.surface_to_id,
-        num_raw=base_result.num_raw,
-        num_canonical=base_result.num_canonical,
-        reduction_pct=base_result.reduction_pct,
+        items=items,
+        surface_to_id=surface_to_id,
+        num_raw=len(unique_labels),
+        num_canonical=num_canonical,
+        reduction_pct=reduction,
+        normalized_to_raws=dict(normalized_to_raws),
+        surface_form_counts=dict(surface_form_counts),
     )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Bridge: entity_type_map
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def build_entity_type_map(
-    entity_result: EntityDeduplicationResult,
-    type_result: DeduplicationResult,
-    triplets: list[dict],
-) -> dict[str, list[str]]:
-    """
-    Build canonical_entity_id → [type_ids] mapping.
-
-    Looks up entities by compound key "name [type]" and types by
-    normalised type label.
-    """
-    entity_types: dict[str, set[str]] = defaultdict(set)
-
-    for triplet in triplets:
-        for name_key, type_key in [
-            ("subject", "subject_type"),
-            ("object", "object_type"),
-        ]:
-            raw_name = triplet.get(name_key, "").strip()
-            raw_type = triplet.get(type_key, "").strip()
-            if not raw_name or not raw_type:
-                continue
-
-            compound = _make_compound(raw_name, raw_type)
-            norm_compound = _normalize_compound(compound)
-            entity_id = entity_result.surface_to_id.get(norm_compound)
-            if not entity_id:
-                entity_id = entity_result.surface_to_id.get(compound)
-            if not entity_id:
-                continue
-
-            norm_type = normalize_label(raw_type)
-            type_id = type_result.surface_to_id.get(norm_type)
-            if not type_id:
-                type_id = type_result.surface_to_id.get(raw_type)
-            if not type_id:
-                continue
-
-            entity_types[entity_id].add(type_id)
-
-    result = {eid: sorted(tids) for eid, tids in entity_types.items()}
-    logger.info(
-        "Built entity_type_map: %d entities with type assignments",
-        len(result),
-    )
-    return result

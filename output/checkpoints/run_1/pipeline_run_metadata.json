@@ -1,0 +1,14 @@
+{
+  "corpus_id": "my_corpus",
+  "num_triplets": 39507,
+  "num_canonical_relations": 8124,
+  "num_canonical_types": 3952,
+  "num_synthesized_types": 293,
+  "num_hierarchy_edges": 1301,
+  "num_hierarchy_roots": 2944,
+  "step_durations_seconds": {
+    "relation_dedup": 0.029635347425937653,
+    "type_dedup": 0.007171008735895157,
+    "hierarchy_induction": 145514.19618687406
+  }
+}
