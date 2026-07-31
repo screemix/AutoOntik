@@ -1,0 +1,84 @@
+# configs/seeds/dolce.yaml
+#
+# DOLCE basic-category seed hierarchy (CLAUDE.md §15.4), for use as an
+# external `hierarchy.seed_roots_path` in a pipeline config -- see e.g.
+# configs/gpt_oss_dolce_seeded.yaml. Loaded by pipeline.load_seed_roots()
+# into hierarchy_induction.HierarchyConfig.seed_roots at run time.
+#
+# The four basic categories (Endurant, Perdurant, Quality, Abstract) are the
+# only roots -- they're pinned as top-level candidates no other node can
+# displace from root status. Everything nested under `children` is a
+# non-root seed node, connected to its seed parent by a trusted, non-LLM
+# HierarchyEdge (see hierarchy_induction.HierarchyEdge.is_seed); a real
+# corpus type only ever attaches under one of these via the ordinary
+# LLM-adjudicated placement, same as any other node.
+#
+# Each label is matched against T* by normalized label if a corpus type of
+# that name already exists, or synthesized fresh (no relation-signature
+# profile) otherwise -- most of DOLCE's finer categories (e.g. "Amount of
+# Matter", "Non-Agentive Social Object") are expected to be synthesized,
+# since they're unlikely to appear verbatim as raw extracted types in most
+# corpora; they still function as valid attachment points.
+
+seed_roots:
+  - label: Endurant
+    children:
+      - label: Physical Endurant
+        children:
+          - label: Amount of Matter
+          - label: Feature
+          - label: Physical Object
+            children:
+              - label: Agentive Physical Object
+              - label: Non-Agentive Physical Object
+                children:
+                  - label: Artefact
+      - label: Non-Physical Endurant
+        children:
+          - label: Non-Physical Object
+            children:
+              - label: Mental Object
+              - label: Social Object
+                children:
+                  - label: Agentive Social Object
+                    children:
+                      - label: Social Agent
+                      - label: Society
+                  - label: Non-Agentive Social Object
+                    children:
+                      - label: Concept
+                        children:
+                          - label: Role
+      - label: Arbitrary Sums
+  - label: Perdurant
+    children:
+      - label: Event
+        children:
+          - label: Accomplishment
+          - label: Achievement
+      - label: Stative
+        children:
+          - label: State
+          - label: Process
+  - label: Quality
+    children:
+      - label: Temporal Quality
+        children:
+          - label: Temporal Location
+      - label: Physical Quality
+        children:
+          - label: Spatial Location
+      - label: Abstract Quality
+  - label: Abstract
+    children:
+      - label: Set
+      - label: Fact
+      - label: Region
+        children:
+          - label: Temporal Region
+            children:
+              - label: Time Interval
+          - label: Physical Region
+            children:
+              - label: Space Region
+          - label: Abstract Region
