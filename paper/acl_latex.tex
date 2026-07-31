@@ -121,169 +121,53 @@ These instructions should be used both for papers submitted for review and for f
 \section{Methods: OntoDisco}
 \label{sec:methods}
 
-\subsection{Overview}
-\label{sec:methods-overview}
+% \subsection{Overview}
+% \label{sec:methods-overview}
 
-OntoDisco extends KGGen \citep{mo2025kggen}, an entity- and
-relation-clustering approach to knowledge graph extraction, with typed
-extraction and an explicit ontology layer: type and relation
-canonicalization, hierarchy induction over the canonical type vocabulary,
-and domain/range constraint mining. It turns a corpus of open-vocabulary,
-LLM-extracted triplets into a canonicalized, typed knowledge graph: a
-deduplicated relation vocabulary, a deduplicated and hierarchically
-organized entity-type vocabulary, a deduplicated entity vocabulary with
-class assignments, and a set of relation-level domain/range constraints.
-The input to the pipeline is a
-collection of raw triplets $(s, t_s, r, o, t_o, Q)$ -- subject, subject type,
-relation, object, object type, and an optional list of qualifiers -- produced
-upstream by a schema-free LLM extractor (\S\ref{sec:extraction}). Every
-downstream stage operates on this flat collection directly, re-resolving
-whatever fields it needs into canonical identifiers rather than consuming one
-shared canonicalized-triplet representation; this keeps each stage's data
-dependencies explicit and independently inspectable.
+OntoDisco turns a corpus of open-vocabulary into a canonicalized, typed knowledge graph: a deduplicated relation vocabulary, a deduplicated and hierarchically organized entity-type vocabulary, a deduplicated entity vocabulary with class assignments, and a set of relation-level domain/range constraints.
+At first, a schema-free LLM extractor  (\S\ref{sec:extraction}) produces a collection of raw triplets: 
+\begin{equation}
+\mathcal{G} = (s, t_s, r, o, t_o, Q),
+\end{equation}
+where $s$, -- subject entity, $t_s$ -- subject type, $r$ -- relation predicate, $o$ -- object entity, $t_o$ -- object type, $Q$ -- an optional list of qualifiers extracted from texts. Then $\mathcal{G}$ is passed further for canonization and typing. Every downstream stage resolves fields into canonical identifiers, keeping each stage's data dependencies explicit and independently inspectable.
 
-The pipeline runs four ordered stages, described in
+The pipeline runs ordered stages, described in
 \S\ref{sec:relation-dedup}--\S\ref{sec:constraints}: \emph{(1) relation
 canonicalization}, \emph{(2) entity-type canonicalization}, which also
-induces a subsumption hierarchy over the resulting type vocabulary,
+induces a taxonomy hierarchy over the resulting type vocabulary,
 \emph{(3) entity deduplication and class assignment}, and \emph{(4)
 domain/range constraint induction}. The ordering is dictated by data
-dependencies rather than by the naive
-extraction$\rightarrow$entities$\rightarrow$types$\rightarrow$relations$\rightarrow$hierarchy$\rightarrow$constraints
-reading a typed-KG pipeline might suggest. Relation canonicalization runs
-\emph{first} because entity-type canonicalization is always conditioned on
-the canonical relation vocabulary as a disambiguating signal, so that
-vocabulary must already exist. Entity deduplication runs after the type
-hierarchy is available because it uses the hierarchy as a symbolic gate on
-candidate pairs. Constraint induction is ordered last, but -- unlike the
-other orderings -- not because of a genuine data dependency: it re-derives
-everything it needs directly from the raw triplets and the outputs of the
-first two stages, and does not consume entity deduplication's output at all.
+dependencies. Entity-type canonicalization is conditioned on the canonical relation vocabulary as a disambiguating signal. Entity deduplication runs after the type hierarchy because it uses the hierarchy as a symbolic gate for candidate synonyms. Constraint induction derives relation constraints directly from the extracted triplets and the outputs of the first two stages.
 
-Three design choices recur across stages. First, candidate pair generation
-for relation, type, and entity deduplication is performed by clustering
-Contriever sentence embeddings \citep{izacard2022contriever} with HDBSCAN
-\citep{campello2013hdbscan} over the full pairwise cosine-distance matrix,
-run with \texttt{allow\_single\_cluster=True}; without it, HDBSCAN's default
-behavior can mark an entire well-formed, internally homogeneous candidate
-pool as noise whenever it has no viable internal sub-split, rather than
-returning it as one cluster, silently discarding true merges. This
-replaces an earlier candidate-generation design based on FAISS
-nearest-neighbor search with union-find, trading FAISS's $O(N \times
-\text{top-}k)$ memory footprint for HDBSCAN's $O(N^2)$ pairwise distance
-matrix and its density-adaptive clustering -- workable at the vocabulary
-sizes observed in practice (on the order of $10^4$ raw surface forms), but a
-real regression at larger scale. Second, every merge/split decision that
-follows candidate generation is adjudicated by a single LLM call per
-candidate group, always at temperature 0 and always unvoted -- no stage
-in the pipeline uses majority voting or repeated-call reconciliation, so
-absolute reproducibility across model versions is not guaranteed, only
-determinism of the sampling procedure itself. Third, each stage is
-checkpointed as a whole once it completes, so that a fault mid-pipeline
-requires re-running only the incomplete stage rather than the entire run.
-
-Step 0 (typed triplet extraction, \S\ref{sec:extraction}) and ontology
-serialization to standard Semantic Web formats are described here as part of
-the overall method but are not, at present, orchestrated as part of the same
-run as Stages 1--4; extraction is invoked upstream to produce the input
-file, and serialization remains future work.
+The following design choices recur across stages. (1) Deduplication of synonimous surface forms is performed by clustering with Contriever sentence embeddings \citep{izacard2022contriever} and HDBSCAN
+\citep{campello2013hdbscan} clustering. Next, every merge/split decision for deduplication is adjudicated by a single LLM call per candidate group.(2) Result of each stage is checkpointed once it completes, allowing of independent inspection of stages' results and re-using it in follow-up experiments.
 
 \subsection{Initial Typed Triplet Extraction}
 \label{sec:extraction}
-
-Raw triplets are produced by prompting an LLM once per input text, at
-temperature 0, to return a JSON object containing a list of Wikidata-style
-triplets, each with a subject, relation, object, an optional list of
-qualifiers, and a subject/object type. Qualifiers are themselves
-relation-object pairs attached to a triplet (e.g.\ \emph{point in time:
-1903} attached to an \emph{award received} triplet), following Wikidata's
-statement-with-qualifiers convention, so that secondary attributes of a fact
-are captured without forcing them into separate triplets of dubious
-semantics.
-
-Crucially, subject and object types are extracted as free text, not
-constrained to any predefined type inventory. This schema-free design is
-what allows the canonical type vocabulary used throughout the rest of the
-pipeline to emerge from the data itself, rather than being fixed in
-advance -- at the cost of pushing all of the resulting redundancy and
-inconsistency in type naming onto the canonicalization stage described next.
-Malformed JSON output is parsed with a cascade of increasingly permissive
-strategies (direct parsing, fenced-code-block extraction, inline-brace
-extraction); a failure that survives all of them is fed back to the model as
-additional context on a bounded number of retries, rather than triggering a
-separate, dedicated repair prompt.
+Subject and object types are extracted as free text, not
+constrained to any predefined schema. This schema-free design allows the canonical type vocabulary used throughout the rest of the pipeline to emerge from the data itself.
 
 \subsection{Relation Deduplication}
 \label{sec:relation-dedup}
 
-Relation canonicalization maps the raw, free-text \texttt{relation} strings
-observed across all triplets onto a canonical relation vocabulary
+Relation canonicalization maps the raw, free-text \texttt{relation} strings observed across all triplets onto a canonical relation vocabulary
 $\mathcal{R}^*$. Candidate clusters are generated by embedding every raw
-relation surface form and clustering with HDBSCAN as described in
-\S\ref{sec:methods-overview}; every multi-member candidate cluster is then
-passed to a single LLM call that decides whether to merge all members into
-one relation or split them into several. Unlike type and entity
-deduplication (\S\ref{sec:type-dedup}, \S\ref{sec:entity-dedup}), this
-decision is not additionally gated by any symbolic signal derived from the
-relations' observed argument types -- a genuinely polysemous predicate
-string can therefore only be split by the LLM call itself.
-
-For each canonical relation, the (still-raw) subject and object type labels
-observed across all of its member triplets are recorded as two separate
-sets, rather than pooled into one order-blind set of argument types. This
-is necessary because constraint induction (\S\ref{sec:constraints}) needs
-domain and range separately; the order-blind view is not discarded, however
--- it resurfaces one level up, where subject-slot and object-slot
-occurrences are summed into the same distributional dimension when building
-the relation-argument profiles that entity-type canonicalization and
-hierarchy induction condition on. Once entity-type canonicalization
-(\S\ref{sec:type-dedup}) produces the canonical type vocabulary, a bridging
-step resolves every canonical relation's subject/object type labels from raw
-strings to canonical type identifiers by dictionary lookup. This step
-performs no LLM calls and is deliberately not idempotent -- applying it
-twice to already-resolved output would look up canonical identifiers as if
-they were still raw labels and silently empty out the result -- so it is
-always recomputed fresh from the two upstream stages' checkpoints rather
-than persisted on its own.
+relation surface form and clustering with HDBSCAN as described
+before. Every multi-member candidate cluster is then passed to a single LLM call that decides whether to merge all members into one relation or split them into several. 
 
 \subsection{Entity Types Deduplication}
 \label{sec:type-dedup}
 
 This stage both flattens the raw type vocabulary into a canonical set
-$\mathcal{T}^*$ and organizes $\mathcal{T}^*$ into a subsumption hierarchy,
-since the two problems share the same underlying representation (a
-relation-argument profile per type) and the second only becomes meaningful
-once the first has removed surface-level redundancy.
+$\mathcal{T}^*$ and organizes $\mathcal{T}^*$ into a taxonomy hierarchy.
 
-\subsubsection{Flat canonicalization}
+\subsubsection{Type canonicalization}
 
 Candidate clusters over raw type labels are generated the same way as for
-relations (\S\ref{sec:relation-dedup}), but with two additional sources of
-evidence available specifically because the canonical relation vocabulary
-already exists at this point. First, before LLM verification, any two
-candidate clusters whose relation-argument profiles (TF-IDF-weighted over
-which canonical relations each type's mentions occur as an argument of) are
-sufficiently cosine-similar are further merged; this can only coarsen a
-cluster, never split one, and clusters with no relation evidence at all are
-left untouched. Second, each candidate label shown to the LLM verifier is
-annotated with a PPMI-weighted string listing the relations it most often
-co-occurs with, giving the verifier concrete distributional evidence beyond
-the bare label string.
+relations (\S\ref{sec:relation-dedup}), but with two additional sources of evidence. First, before LLM verification, any two candidate clusters whose relation-argument profiles (TF-IDF-weighted over which canonical relations each type's mentions occur as an argument of) are sufficiently cosine-similar are further merged. Second, each candidate label shown to the LLM verifier is annotated with a the relations it most often co-occurs with, giving the verifier concrete distributional evidence beyond the bare label string.
 
-The verification prompt enforces a hyponymy (``kind of'') test that takes
-priority over this contextual overlap: two labels are merged only if
-neither is a hyponym of the other, even when their relation-argument
-profiles overlap almost entirely (e.g.\ \emph{documentary film} and
-\emph{film} participate in nearly the same relations, but must be kept
-distinct, whereas \emph{movie} and \emph{film}, true synonyms, should
-merge). This guard was added after observing the opposite failure mode in
-practice -- general/specific pairs such as \emph{journal}/\emph{academic
-journal} being merged as synonyms on the strength of context overlap alone
--- a mistake that is unrecoverable once hierarchy induction runs on top of
-an already-flattened vocabulary that has silently lost a real subsumption
-distinction. No frequency-based filtering is applied at this stage: every
-observed type label becomes, or is merged into, a member of $\mathcal{T}^*$
-regardless of how rarely it occurs in the corpus.
+The verification prompt additionally enforces a hyponymy (``kind of'') test: two labels are merged only if neither is a hyponym of the other, even when their relation-argument profiles overlap almost entirely. For example, \ \emph{documentary film} and \emph{film} participate in the same relations, but LLM instructed to keep them distinct, whereas \emph{movie} and \emph{film}, true synonyms, should 
+be merged.
 
 \subsubsection{Hierarchy induction}
 \label{sec:hierarchy-induction}
@@ -294,18 +178,10 @@ hierarchy over $\mathcal{T}^*$, both to gate candidate pairs during entity
 deduplication (\S\ref{sec:entity-dedup}) and to generalize sparse
 domain/range observations during constraint induction
 (\S\ref{sec:constraints}). We induce this hierarchy with a single
-priority-ordered, top-down, pairwise placement procedure, the third design
-we evaluated for this step. The two designs it replaces -- an ensemble of a
-containment score and majority-voted pairwise comparisons, and a
-recursive bottom-up clustering loop over a fused embedding/relation-profile
-similarity -- shared two structural gaps that motivated the current design:
-(1) once a node was absorbed into a coarser parent, it lost its own
-identity and could never again be compared against a genuine synonym
-encountered later, so real duplicates could permanently fail to merge; and
-(2) attachment was permanent, so a node discovered early and paired against
-an overly broad candidate stayed there even if a more specific intermediate
-type was synthesized afterward, producing a hierarchy sparser than the data
-actually supported, purely as an artifact of processing order.
+priority-ordered, top-down, pairwise placement procedure:
+we evaluated for this step.
+
+% WHY NOT FLAT CLUSTERING?
 
 \paragraph{Priority queue.} Every canonical type in $\mathcal{T}^*$ is
 represented by a relation-argument profile, PPMI-weighted by default. A
@@ -315,128 +191,72 @@ for every type $u$, an in-degree score counting how many other types $v$
 look containable within it:
 \begin{equation}
   \label{eq:weeds-indeg}
-  \mathrm{indeg}(u) = \bigl| \{\, v \neq u : \mathrm{WeedsPrec}(v, u) \geq
-  \tau \,\} \bigr|,
+  \mathrm{deg_{in}}(u) = \bigl| \{\, v \neq u : \mathrm{WeedsPrec}(v, u) \geq
+  \tau \,\} \bigr|.
+  \\
 \end{equation}
-where $\mathrm{WeedsPrec}(v, u) = \sum_{f \in F(v)} w_u(f) \big/ \sum_{f \in
-F(v)} w_v(f)$ is the fraction of $v$'s relation-argument weight that $u$
-also exhibits, $F(v)$ is the set of relation-argument features with nonzero
-weight under $v$, and $\tau$ is a fixed containment threshold. This in-degree
-is a structural breadth signal, not a semantic judgment: types are grouped
-into priority bands from highest in-degree to lowest (with a tolerance
-parameter widening a band past exact ties, since in-degree from a
-frequency-derived profile is a noisy proxy for generality, not a validated
-total order), and every node in a band is placed before any node in the
-next. If a set of external seed labels is supplied, each is matched to
-$\mathcal{T}^*$ by normalized label (or synthesized fresh if unmatched) and
-pinned at the top of the queue as a candidate no other node can displace;
-without seeds, the top band of the same ranking performs root discovery
-instead, so seeded and unseeded runs are the same procedure rather than two
-separate code paths.
+$\mathrm{WeedsPrec}(v, u)$ is the fraction of $v$'s relation-argument weight that $u$
+also exhibits:
+\begin{equation}
+  \mathrm{WeedsPrec}(v, u) = \sum_{f \in F(v)} w_u(f) \big/ \sum_{f \in
+F(v)} w_v(f),
+\end{equation}
+and $F(v)$ is the set of relation-argument features with nonzero
+weight under $v$, and $\tau$ is a fixed containment threshold. The in-degree is a structural breadth signal, not a semantic judgment: types are grouped into priority bands from highest in-degree to lowest to identify high-level ontology concept first. If a set of external seed labels is supplied, each is matched to
+$\mathcal{T}^*$ by normalized label (or synthesized fresh if unmatched) and pinned at the top of the queue as a root candidates with no other node can be a parent of which; without seeds, the top band of the same ranking performs root discovery instead.
 
 \paragraph{Per-node placement.} Each node is routed top-down through
 whatever higher-priority bands have already placed: at every level, the
 remaining candidates (initially the whole pool; during descent, an
 already-placed node's existing children) are shown to the LLM in
-similarity-ranked batches, and a response of ``none of these'' escalates to
-the next, less-similar batch (up to a fixed cap) rather than truncating to a
-small fixed top-$k$ -- so a lexically distant but relationally correct match
-is never permanently invisible, only reached after more escalation. Every
-batch response is one of four outcomes:
+similarity-ranked batches, and a response of ``none of these'' escalates to the next, less-similar batch (up to a fixed cap). Every
+batch response is one of four outcomes: 
+% \textbf{synonym} of a candidate, \textbf{child of} a candidate, \textbf{parent of} a candidate, \textbf{none} of the candidates.
 \begin{itemize}
-  \item \textbf{synonym} of a candidate: merge the two nodes. Because
-  already-placed nodes remain visible and comparable throughout descent,
-  this outcome can fire even against a node placed by an earlier band --
-  directly closing gap (1) above.
+  \item \textbf{synonym} of a candidate: merge the two synonymous nodes that were not captured in flat clustering deduplication.
   \item \textbf{child of} a candidate: descend one level deeper into that
   candidate's own children at the next iteration, rather than attaching
   immediately, so that a more specific attachment is never preempted.
-  \item \textbf{parent of} a candidate: insert the incoming node
-  \emph{above} the candidate, detaching its existing parent edge (if any)
+  \item \textbf{parent of} candidates: insert the incoming node
+  \emph{above} the defined candidates, detaching its existing parent edge (if any)
   and reattaching it beneath the new node, which then settles at the
-  current level. This retroactive reparenting is the direct fix for gap
-  (2): a later, more specific node can correct an earlier too-shallow
-  attachment instead of merely preventing future ones.
+  current level. 
   \item \textbf{none} of the candidates fit at any escalation batch: the
   node settles at its current position -- as a new root if this occurred at
   the top level, or as an ordinary child of its current descent anchor
   otherwise.
 \end{itemize}
-When two candidates are judged plausible siblings without either containing
-the other, a new abstract parent is synthesized for both (rather than
-forcing one to subsume the other), and the synthesized type re-enters the
-pool to be placed by a later band.
 
-\paragraph{Depth bound and guarantees.} A maximum-depth cap bounds the
-worst-case number of placement decisions any single node can cost; a node
-that would need to exceed it is deferred into a structurally separate
-unresolved bucket rather than being force-attached or discarded, preserving
-the invariant that every recorded edge reflects an LLM-confirmed is-a
-judgment. Because reparenting always removes a node's existing parent edge
-before adding the new one, the result is a single-parent forest at every
+\paragraph{Depth bound and guarantees.} A maximum-depth cap parameter bounds the worst-case number of placement decisions for any candidate node. A node that would need to exceed it is placed into a structurally separate unresolved bucket rather than being force-attached or discarded, allowing to extent the resulted hieararchy later on. The result of such procedure is always a single-parent forest at every
 point in the procedure: acyclicity and the absence of transitive shortcut
-edges follow directly from this construction, at the cost of being unable
-to represent a type that genuinely belongs under two unrelated parents
-(it is assigned to whichever parent its first accepted placement produces).
-The procedure does not backtrack across an incorrect top-level branch
-chosen early in descent; only within-branch placement mistakes are
-corrected by the ``parent of'' outcome.
+edges follow directly from the construction. 
 
 \subsection{Entity Deduplication}
 \label{sec:entity-dedup}
 
-Entity deduplication canonicalizes entity mentions and, as a direct
-byproduct of that clustering, assigns each canonical entity its set of
-types -- there is no separate class-assignment pass. An entity's identity
-is the compound pair (name, canonical type) rather than name alone, so
+Entity deduplication canonicalizes entity mentions and  assigns each canonical entity types. An entity's identity is the compound pair (name, canonical type) rather than name alone, so
 that homonymous names typed differently (e.g.\ \emph{Paris} the city versus
-\emph{Paris} the person) are never conflated by construction; mentions
-whose type does not resolve to a member of $\mathcal{T}^*$ are skipped, but
-the entity they refer to may still canonicalize through its other,
-resolvable mentions.
+\emph{Paris} the person) are never conflated by construction.
 
-Before any embedding-based comparison, candidate pairs are restricted by a
-hard, symbolic gate: two mentions are only ever compared if they share
+Before embedding-based comparison, candidate pairs are restricted by a symbolic gate: two mentions are only ever compared if they share
 literally the same type, or are siblings under the same immediate parent
-in the induced type hierarchy (\S\ref{sec:hierarchy-induction}) -- no
-weaker notion of relatedness (a shared grandparent, or any common ancestor)
-qualifies. Partitioning on this gate before clustering is both cheaper,
-since each HDBSCAN call only ever compares candidates within one sibling
-group rather than materializing one global distance matrix over the whole
-entity vocabulary, and exact rather than approximate: two mentions in
-different partitions could never have merged under the gate regardless of
-embedding proximity, so no recall is lost relative to computing the full
-distance matrix and filtering afterward.
+in the induced type hierarchy (\S\ref{sec:hierarchy-induction}). HDBSCAN call only ever compares candidates within one sibling
+group: two mentions in different partitions could never have merged under the gate regardless of embedding proximity.
 
 Within each partition, merging proceeds over several rounds rather than a
 single pass: each round re-embeds the current pool (already-merged
 canonical entities plus untouched singleton mentions), re-clusters with
-HDBSCAN, and sends multi-member clusters to the LLM for verification, then
-folds accepted merges back into the pool for the next round. Rounds stop
+HDBSCAN, and sends multi-member clusters to the LLM for verification, then folds accepted merges back into the pool for the next round. Rounds stop
 once one produces no further reduction in pool size, or a fixed round cap
-is reached. This is necessary because a single pass can miss merges that
-only become visible after an earlier merge changes the embedding
-neighborhood -- for instance, three near-duplicate name variants where a
-first-round merged form (\emph{Christopher Nolan}, from \emph{Chris Nolan}
-and \emph{C. Nolan}) turns out to be a closer embedding match to a fourth
-variant (\emph{Christopher J. Nolan}) than any individual original form
-was. The LLM verification prompt is deliberately precision-oriented
-(``when in doubt, keep entities separate''), reflecting the asymmetric cost
-of over- versus under-merging entity identities in a downstream knowledge
-graph.
+is reached.
 
 \subsection{Constraints Construction}
 \label{sec:constraints}
 
-Neither relation deduplication nor hierarchy induction retains the
-\emph{joint} per-triplet pairing of subject and object type for a given
-relation -- only marginal type sets. Constraint induction therefore starts
-by re-resolving the raw triplets directly, in four stages.
-
 \paragraph{Stage 0: re-resolution.} For every raw triplet, its subject and
 object type strings and its relation string are looked up against the
 canonical vocabularies produced by \S\ref{sec:relation-dedup} and
-\S\ref{sec:type-dedup}; triplets that fail to resolve are dropped.
+\S\ref{sec:type-dedup}.
 
 \paragraph{Stage 1: relation-direction resolution.} Because relation
 canonicalization merges surface forms without regard to grammatical role
@@ -444,32 +264,28 @@ canonicalization merges surface forms without regard to grammatical role
 predicate together with its grammatical inverse (e.g.\ \emph{directed} and
 \emph{was directed by}), which would otherwise fragment one well-typed
 relation's domain/range support across two competing, individually weak
-orientations. Subject/object type overlap cannot by itself distinguish this
-case from a genuinely order-free relation with identical domain and range
-types, since both situations produce the same marginal type statistics;
-direction is instead resolved from the signal that actually carries it, the
-literal surface form. For every canonical relation with more than one
+orientations. 
+
+% Subject/object type overlap cannot by itself distinguish this
+% case from a genuinely order-free relation with identical domain and range
+% types, since both situations produce the same marginal type statistics;
+% direction is instead resolved from the signal that actually carries it, the literal surface form. 
+
+For every canonical relation with more than one
 surface form, a single LLM call classifies each surface form against the
 canonical label as \emph{forward} or \emph{inverted}; triplets whose
 original predicate was classified inverted have their subject and object
 types swapped before the next stage. This catches merged grammatical
-inverses but not a genuinely order-free relation whose single surface form
-happens to have been extracted with swapped argument order across
-different sentences.
+inverses.
 
 \paragraph{Stage 2: hierarchy generalization.} For each canonical
 relation's domain (subject-role types) and range (object-role types),
 considered independently, we compute the exact lowest common ancestor of
-all observed types in the single-parent hierarchy, by intersecting each
-type's leaf-to-root ancestor path. No similarity threshold or pruning is
-applied at this stage: every observed type, however rare, is folded into
-whichever ancestor its path leads to, so sparse leaf-level observations are
-generalized to well-attested ancestors automatically rather than requiring
-explicit support-based filtering. If the observed types span disconnected
+all observed types in the single-parent hierarchy. If the observed types span disconnected
 parts of the hierarchy forest, they are partitioned by which root each
 descends from and an LCA is computed independently within each partition,
-yielding more than one domain (or range) signature -- and hence more than
-one constraint -- for relations that genuinely connect unrelated type
+yielding more than one domain (or range) signature and hence more than
+one constraint for relations that genuinely connect unrelated type
 families.
 
 \paragraph{Stage 3: confidence scoring.} Triplets are regrouped by their
@@ -483,10 +299,7 @@ relation's total triplet count:
   T_r)}{\mathrm{total}(r)}.
 \end{equation}
 This confidence is thresholded into \textsc{Hard}, \textsc{Soft}, and
-\textsc{Hint} constraint strengths (or discarded below the lowest
-threshold) using two configurable cutoffs -- the only tunable values this
-stage introduces, applied once a signature type is already fully
-determined by Stages 0--2.
+\textsc{Hint} constraint strengths.
 
 % \section{KG Retrieval and QA}
 % TODO -- not yet written.
