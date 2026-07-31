@@ -139,6 +139,10 @@ def test_sibling_types_are_merged():
 
     entity = next(iter(result.entities.values()))
     assert entity.type_ids == {"type_doc", "type_bio"}
+    assert entity.primary_type_id == "type_film", (
+        "primary_type_id must be the LCA of the merged sibling types (their shared "
+        "immediate parent 'film'), not one of the two siblings themselves"
+    )
 
 
 def test_disjoint_root_types_are_not_merged():

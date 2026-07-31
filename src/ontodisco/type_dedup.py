@@ -5,7 +5,7 @@ Type Deduplication via HAC + Contriever + LLM Verification
 Merges surface-form variants of the same conceptual type
 ("film director", "movie director", "filmmaker") into a single canonical type.
 
-This is a thin wrapper around dedup_base.deduplicate().
+This is a thin wrapper around dedup_base.deduplicate_with_rounds().
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from src.ontodisco.utils.dedup_base import (
     ContrieverEmbedder,
     DeduplicationResult,
     cluster_hdbscan,
-    deduplicate,
+    deduplicate_with_rounds,
     normalize_label,
     verify_clusters_with_llm,
 )
@@ -27,7 +27,6 @@ from src.ontodisco.relation_context import (
     build_relation_counts,
     build_type_relation_profiles,
     describe_relation_context,
-    merge_clusters_by_relation_signature,
 )
 
 if TYPE_CHECKING:
@@ -91,8 +90,10 @@ def deduplicate_types(
     embed_batch_size: int = 64,
     device: str = None,
     relation_result: "RelationDeduplicationResult | None" = None,
-    relation_signature_merge_threshold: float = 0.8,
     relation_context_top_k: int = 5,
+    max_merge_rounds: int = 5,
+    max_parallel_workers: int = 8,
+    max_cluster_size: int = 40,
 ) -> TypeDeduplicationResult:
     """
     Full type deduplication pipeline: normalise → embed → HDBSCAN → LLM verify.
@@ -110,29 +111,36 @@ def deduplicate_types(
         device:            Device for Contriever ("cuda", "cpu", or None for auto).
         relation_result:   Optional RelationDeduplicationResult from relation
                            dedup (relation_dedup.deduplicate_relations()). When
-                           given, two additional relation-signature signals
-                           kick in:
-                             1. Clusters produced by label HDBSCAN are additionally
-                                merged together (before LLM verification) when
-                                their aggregate relation-signature (TF-IDF)
-                                cosine similarity exceeds
-                                relation_signature_merge_threshold — this can
-                                pull together labels whose bare-label
-                                embeddings never clustered them (e.g. "movie"
-                                and "flick" if HDBSCAN missed it, but both fill
-                                identical relation argument slots).
-                             2. Each candidate shown to the LLM verifier is
-                                annotated with a short relational-context
-                                description (e.g. "film (context: often
-                                appears as object of: directed, starred in)"),
-                                giving the LLM concrete evidence for merge/
-                                split decisions.
-                           When None, behavior is identical to before this
-                           parameter existed.
-        relation_signature_merge_threshold: TF-IDF cosine similarity above
-                           which two HDBSCAN clusters are unioned (see above).
+                           given, each candidate shown to the LLM verifier is
+                           annotated with a short relational-context
+                           description (e.g. "film (context: often appears as
+                           object of: directed, starred in)"), giving the LLM
+                           concrete evidence for merge/split decisions.
+                           Relation-signature evidence is deliberately NOT used
+                           to auto-union HDBSCAN clusters before LLM
+                           verification here any more -- that job now belongs
+                           to hierarchy induction's Weeds-precision pairwise
+                           track (Step 3), which catches the same
+                           relationally-similar-but-lexically-distant pairs
+                           via genuine pairwise LLM verification (including
+                           same_concept) rather than a blind cosine-threshold
+                           cluster merge. When relation_result is None,
+                           behavior is identical to before this parameter
+                           existed.
         relation_context_top_k: How many top relation dimensions to
                            render per label in the LLM-facing context string.
+        max_merge_rounds:  Max embed -> cluster -> LLM-verify passes
+                           (dedup_base.deduplicate_with_rounds) before
+                           stopping, once a round produces no further
+                           reduction in the canonical type count. Mirrors
+                           entity_dedup's per-partition round loop; 1
+                           behaves identically to a plain single-pass
+                           deduplicate() call.
+        max_parallel_workers: Thread pool size for concurrent LLM cluster
+                           verification calls within each round.
+        max_cluster_size:  Size cap before a cluster is split into
+                           sub-batches + stitched back together (see
+                           dedup_base.verify_clusters_with_llm).
 
     Returns:
         TypeDeduplicationResult with the canonical type vocabulary.
@@ -151,16 +159,11 @@ def deduplicate_types(
             surface_form_counts=surface_form_counts,
         )
 
-    cluster_postprocess_fn = None
     member_context = None
     if relation_result is not None:
         relation_counts = build_relation_counts(relation_result)
-        tfidf_profiles = build_type_relation_profiles(relation_counts, weighting="tfidf")
         ppmi_profiles = build_type_relation_profiles(relation_counts, weighting="ppmi")
 
-        cluster_postprocess_fn = lambda clusters: merge_clusters_by_relation_signature(
-            clusters, tfidf_profiles, threshold=relation_signature_merge_threshold,
-        )
         member_context = {
             label: describe_relation_context(
                 label, ppmi_profiles, relation_result, top_k=relation_context_top_k,
@@ -169,7 +172,7 @@ def deduplicate_types(
         }
         member_context = {label: ctx for label, ctx in member_context.items() if ctx}
 
-    base_result = deduplicate(
+    base_result = deduplicate_with_rounds(
         all_labels=raw_type_labels,
         llm_verifier=llm_extractor,
         embedder=embedder,
@@ -178,8 +181,10 @@ def deduplicate_types(
         id_prefix="type",
         id_width=4,
         build_item=_build_type,
-        cluster_postprocess_fn=cluster_postprocess_fn,
         member_context=member_context,
+        max_rounds=max_merge_rounds,
+        max_workers=max_parallel_workers,
+        max_cluster_size=max_cluster_size,
     )
 
     return TypeDeduplicationResult(

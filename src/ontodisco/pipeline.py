@@ -6,11 +6,10 @@ Runs the currently-implemented steps of the ontology discovery pipeline from
 a single YAML config:
 
     Relation Canonicalization -> Type Canonicalization -> Hierarchy Induction
-    -> Entity Deduplication + Class Assignment
+    -> Entity Deduplication + Class Assignment -> Constraint Induction
 
-(Domain/Range Constraint Induction and Serialization are not implemented yet
-and are out of scope here -- add them as their own checkpointed steps once
-they exist.)
+(Serialization is not implemented yet and is out of scope here -- add it as
+its own checkpointed step once it exists.)
 
 Step order is NOT "entity dedup, relation dedup, hierarchy induction" in that
 naive reading -- relation canonicalization runs FIRST and entity dedup runs
@@ -32,9 +31,20 @@ LAST, because:
     induced TypeHierarchy (from hierarchy induction) to gate candidate
     merges by shared immediate parent (see entity_dedup.py's module
     docstring). So it can only run after BOTH of those steps.
+  - constraints.induce_constraints() runs LAST of all: it needs the
+    canonical type vocabulary, the canonical relation vocabulary WITH
+    subject_types/object_types already resolved to type_ids (the same
+    update_relation_type_map() bridge hierarchy induction depends on), and
+    the induced TypeHierarchy for its hierarchy-generalization stage (LCA
+    over observed domain/range types). It re-resolves the raw triplets
+    itself (nothing upstream keeps the joint per-triple (subject_type,
+    object_type) pairing for a relation), so it does not depend on
+    entity_dedup's output at all -- it's ordered last only because it's the
+    remaining orchestrated step, not because of a data dependency on entity
+    dedup specifically.
 
-Each of the four LLM-backed steps (relation dedup, type dedup, hierarchy
-induction, entity dedup) is checkpointed to
+Each of the five LLM-backed steps (relation dedup, type dedup, hierarchy
+induction, entity dedup, constraint induction) is checkpointed to
 `output_dir/checkpoints/run_<n>/<step>.pkl` via pickle (preserves the
 dataclasses / sets exactly, no custom serialization needed). Every run gets
 its own `run_<n>` folder (n = 1, 2, 3, ... auto-incremented) so successive
@@ -69,6 +79,7 @@ from typing import Optional
 
 import yaml
 
+from src.ontodisco.constraints import ConstraintConfig, RelationConstraint, induce_constraints
 from src.ontodisco.entity_dedup import EntityDeduplicationResult, deduplicate_entities
 from src.ontodisco.hierarchy_induction import (
     HierarchyConfig,
@@ -80,12 +91,15 @@ from src.ontodisco.relation_dedup import (
     deduplicate_relations,
     update_relation_type_map,
 )
-from src.ontodisco.type_dedup import TypeDeduplicationResult, deduplicate_types
+from src.ontodisco.type_dedup import CanonicalType, TypeDeduplicationResult, deduplicate_types
+from src.ontodisco.utils.dedup_base import normalize_label
 from src.ontodisco.utils.openai_utils import LLMTripletExtractor
 
 logger = logging.getLogger(__name__)
 
-STEP_NAMES = ("relation_dedup", "type_dedup", "hierarchy_induction", "entity_dedup")
+STEP_NAMES = (
+    "relation_dedup", "type_dedup", "hierarchy_induction", "entity_dedup", "constraints",
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -109,18 +123,28 @@ class EmbeddingConfig:
 @dataclass
 class TypeCanonicalizationConfig:
     hac_threshold: float = 0.75
-    relation_signature_merge_threshold: float = 0.8
     relation_context_top_k: int = 5
+    max_merge_rounds: int = 5          # embed->cluster->LLM-verify passes; stops early once a
+                                        # round produces no further reduction (dedup_base.deduplicate_with_rounds)
+    max_parallel_workers: int = 8      # thread pool size for concurrent LLM cluster verification
+    max_cluster_size: int = 40         # clusters over this size are split into sub-batches + stitched
+                                        # back together, instead of one oversized LLM call (dedup_base.verify_clusters_with_llm)
 
 
 @dataclass
 class RelationCanonicalizationConfig:
     similarity_threshold: float = 0.75
+    max_merge_rounds: int = 5
+    max_parallel_workers: int = 8
+    max_cluster_size: int = 40
 
 
 @dataclass
 class EntityCanonicalizationConfig:
     similarity_threshold: float = 0.85
+    max_merge_rounds: int = 5
+    max_parallel_workers: int = 8      # thread pool size for concurrent LLM cluster verification
+    max_cluster_size: int = 40
 
 
 @dataclass
@@ -135,6 +159,7 @@ class PipelineConfig:
     relation_canonicalization: RelationCanonicalizationConfig = field(default_factory=RelationCanonicalizationConfig)
     hierarchy: HierarchyConfig = field(default_factory=HierarchyConfig)
     entity_canonicalization: EntityCanonicalizationConfig = field(default_factory=EntityCanonicalizationConfig)
+    constraints: ConstraintConfig = field(default_factory=ConstraintConfig)
 
 
 def _from_dict(cls, data: dict):
@@ -161,6 +186,7 @@ def load_config(path: str | Path) -> PipelineConfig:
         relation_canonicalization=_from_dict(RelationCanonicalizationConfig, raw.get("relation_canonicalization", {})),
         hierarchy=_from_dict(HierarchyConfig, raw.get("hierarchy", {})),
         entity_canonicalization=_from_dict(EntityCanonicalizationConfig, raw.get("entity_canonicalization", {})),
+        constraints=_from_dict(ConstraintConfig, raw.get("constraints", {})),
     )
 
 
@@ -179,6 +205,25 @@ def load_triplets(path: str | Path) -> list[dict]:
                 triplets.append(json.loads(line))
     logger.info("Loaded %d triplets from %s", len(triplets), path)
     return triplets
+
+
+def load_seed_roots(path: str | Path) -> list:
+    """Load a seed hierarchy (hierarchy_induction.HierarchyConfig.seed_roots'
+    shape -- a flat list of labels, or nested {"label", "children"} dicts)
+    from a standalone YAML file, so a reusable seed ontology like DOLCE
+    (configs/seeds/dolce.yaml) doesn't have to be duplicated inline in every
+    pipeline config that wants it. Accepts either a file whose top-level
+    content IS the list, or one that wraps it under a `seed_roots:` key
+    (matching how the same structure is written inline under `hierarchy:`
+    in a pipeline config) -- the latter is the documented/recommended form,
+    since it self-labels the file's contents."""
+    with open(path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f)
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, dict):
+        return raw.get("seed_roots", [])
+    raise ValueError(f"Seed roots file {path!r} must contain a list or a 'seed_roots:' mapping")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -257,6 +302,7 @@ class OntoDiscoResult:
     type_vocab: TypeDeduplicationResult
     hierarchy_result: HierarchyInductionResult
     entity_vocab: EntityDeduplicationResult
+    constraints: list[RelationConstraint]
 
 
 def run_pipeline(config: PipelineConfig, *, resume: bool = False) -> OntoDiscoResult:
@@ -276,11 +322,33 @@ def run_pipeline(config: PipelineConfig, *, resume: bool = False) -> OntoDiscoRe
 
     triplets = load_triplets(config.input_path)
     step_durations: dict[str, float] = {}
+    token_usage_by_step: dict[str, dict] = {}
+
+    # Resolve an external seed-ontology file (if any) before hierarchy
+    # induction runs, mirroring how config.input_path is only read here at
+    # run time rather than at load_config() time. Doing this unconditionally
+    # -- even under --resume, when hierarchy_induction's checkpoint may make
+    # induce_hierarchy() a no-op this run -- keeps config.hierarchy.seed_roots
+    # (and therefore run_metadata.json's config dump) an accurate record of
+    # the seed hierarchy actually in effect, not just a dangling file path.
+    if config.hierarchy.seed_roots_path:
+        if config.hierarchy.seed_roots:
+            logger.warning(
+                "hierarchy.seed_roots_path is set; ignoring the %d inline seed_roots "
+                "entry/entries already present in hierarchy.seed_roots",
+                len(config.hierarchy.seed_roots),
+            )
+        config.hierarchy.seed_roots = load_seed_roots(config.hierarchy.seed_roots_path)
+        logger.info(
+            "Loaded %d top-level seed root(s) from %s",
+            len(config.hierarchy.seed_roots), config.hierarchy.seed_roots_path,
+        )
 
     # ── Step: Relation Canonicalization ───────────────────────────────────────
     # Checkpointed in its RAW (pre-type-map-resolution) form deliberately --
     # see update_relation_type_map() below for why.
     t0 = time.monotonic()
+    usage0 = llm_extractor.get_usage_snapshot()
     if resume and _has_checkpoint(run_dir, "relation_dedup"):
         relation_vocab = _load_checkpoint(run_dir, "relation_dedup")
     else:
@@ -292,14 +360,19 @@ def run_pipeline(config: PipelineConfig, *, resume: bool = False) -> OntoDiscoRe
             similarity_threshold=config.relation_canonicalization.similarity_threshold,
             embed_batch_size=config.embedding.embed_batch_size,
             device=config.embedding.device,
+            max_merge_rounds=config.relation_canonicalization.max_merge_rounds,
+            max_parallel_workers=config.relation_canonicalization.max_parallel_workers,
+            max_cluster_size=config.relation_canonicalization.max_cluster_size,
         )
         _save_checkpoint(run_dir, "relation_dedup", relation_vocab)
     step_durations["relation_dedup"] = time.monotonic() - t0
+    token_usage_by_step["relation_dedup"] = _diff_usage(usage0, llm_extractor.get_usage_snapshot())
 
     # ── Step: Type Canonicalization ───────────────────────────────────────────
     # Always given the relation vocabulary as a disambiguating signal (see
     # module docstring) -- this pipeline never runs it "bare".
     t0 = time.monotonic()
+    usage0 = llm_extractor.get_usage_snapshot()
     if resume and _has_checkpoint(run_dir, "type_dedup"):
         type_vocab = _load_checkpoint(run_dir, "type_dedup")
     else:
@@ -313,11 +386,14 @@ def run_pipeline(config: PipelineConfig, *, resume: bool = False) -> OntoDiscoRe
             embed_batch_size=config.embedding.embed_batch_size,
             device=config.embedding.device,
             relation_result=relation_vocab,
-            relation_signature_merge_threshold=config.type_canonicalization.relation_signature_merge_threshold,
             relation_context_top_k=config.type_canonicalization.relation_context_top_k,
+            max_merge_rounds=config.type_canonicalization.max_merge_rounds,
+            max_parallel_workers=config.type_canonicalization.max_parallel_workers,
+            max_cluster_size=config.type_canonicalization.max_cluster_size,
         )
         _save_checkpoint(run_dir, "type_dedup", type_vocab)
     step_durations["type_dedup"] = time.monotonic() - t0
+    token_usage_by_step["type_dedup"] = _diff_usage(usage0, llm_extractor.get_usage_snapshot())
 
     # ── Bridge: resolve relation_vocab's subject_types/object_types to type_ids ──
     # Deliberately NOT its own checkpoint: it mutates relation_vocab in place,
@@ -331,6 +407,7 @@ def run_pipeline(config: PipelineConfig, *, resume: bool = False) -> OntoDiscoRe
 
     # ── Step: Hierarchy Induction ─────────────────────────────────────────────
     t0 = time.monotonic()
+    usage0 = llm_extractor.get_usage_snapshot()
     if resume and _has_checkpoint(run_dir, "hierarchy_induction"):
         hierarchy_result = _load_checkpoint(run_dir, "hierarchy_induction")
     else:
@@ -343,6 +420,14 @@ def run_pipeline(config: PipelineConfig, *, resume: bool = False) -> OntoDiscoRe
         )
         _save_checkpoint(run_dir, "hierarchy_induction", hierarchy_result)
     step_durations["hierarchy_induction"] = time.monotonic() - t0
+    token_usage_by_step["hierarchy_induction"] = _diff_usage(usage0, llm_extractor.get_usage_snapshot())
+
+    # ── Bridge: fold hierarchy induction's synthesized types into type_vocab ──
+    # Same rationale/pattern as update_relation_type_map above: cheap, pure,
+    # idempotent, so always re-derive it rather than checkpoint it on its
+    # own. Must run before entity_dedup/constraints so both see verbalized
+    # labels for synthesized parent types, not just their raw type_ids.
+    type_vocab = _merge_synthesized_types_into_vocab(type_vocab, hierarchy_result)
 
     # ── Step: Entity Deduplication + Class Assignment ─────────────────────────
     # Runs LAST, after the type hierarchy exists: entity_dedup.py gates
@@ -351,6 +436,7 @@ def run_pipeline(config: PipelineConfig, *, resume: bool = False) -> OntoDiscoRe
     # canonical type_ids in the compound labels -- neither is available until
     # both type_dedup and hierarchy_induction have run.
     t0 = time.monotonic()
+    usage0 = llm_extractor.get_usage_snapshot()
     if resume and _has_checkpoint(run_dir, "entity_dedup"):
         entity_vocab = _load_checkpoint(run_dir, "entity_dedup")
     else:
@@ -364,19 +450,73 @@ def run_pipeline(config: PipelineConfig, *, resume: bool = False) -> OntoDiscoRe
             similarity_threshold=config.entity_canonicalization.similarity_threshold,
             embed_batch_size=config.embedding.embed_batch_size,
             device=config.embedding.device,
+            max_merge_rounds=config.entity_canonicalization.max_merge_rounds,
+            max_parallel_workers=config.entity_canonicalization.max_parallel_workers,
+            max_cluster_size=config.entity_canonicalization.max_cluster_size,
         )
         _save_checkpoint(run_dir, "entity_dedup", entity_vocab)
     step_durations["entity_dedup"] = time.monotonic() - t0
+    token_usage_by_step["entity_dedup"] = _diff_usage(usage0, llm_extractor.get_usage_snapshot())
+
+    # ── Step: Domain/Range Constraint Induction ───────────────────────────────
+    # Doesn't depend on entity_dedup's output at all (see module docstring) --
+    # ordered last only because it's the remaining orchestrated step. Needs
+    # relation_vocab's subject_types/object_types already resolved to type_ids
+    # (the update_relation_type_map() bridge above, same precondition
+    # hierarchy induction has) and the induced TypeHierarchy for its
+    # hierarchy-generalization (LCA) stage.
+    t0 = time.monotonic()
+    usage0 = llm_extractor.get_usage_snapshot()
+    if resume and _has_checkpoint(run_dir, "constraints"):
+        constraints_result = _load_checkpoint(run_dir, "constraints")
+    else:
+        logger.info("=== Step: Constraint Induction ===")
+        constraints_result = induce_constraints(
+            triplets=triplets,
+            type_vocab=type_vocab,
+            relation_vocab=relation_vocab,
+            hierarchy=hierarchy_result.hierarchy,
+            llm_extractor=llm_extractor,
+            config=config.constraints,
+        )
+        _save_checkpoint(run_dir, "constraints", constraints_result)
+    step_durations["constraints"] = time.monotonic() - t0
+    token_usage_by_step["constraints"] = _diff_usage(usage0, llm_extractor.get_usage_snapshot())
 
     _write_run_metadata(
         run_dir, config, triplets, relation_vocab, type_vocab, hierarchy_result, entity_vocab,
-        step_durations, start_time,
+        constraints_result, step_durations, token_usage_by_step, start_time,
     )
 
     return OntoDiscoResult(
         relation_vocab=relation_vocab, type_vocab=type_vocab, hierarchy_result=hierarchy_result,
-        entity_vocab=entity_vocab,
+        entity_vocab=entity_vocab, constraints=constraints_result,
     )
+
+
+def _merge_synthesized_types_into_vocab(
+    type_vocab: TypeDeduplicationResult,
+    hierarchy_result: HierarchyInductionResult,
+) -> TypeDeduplicationResult:
+    """Fold each SynthesizedType minted during hierarchy induction into the
+    type vocabulary as a real CanonicalType (SynthesizedType's own docstring
+    says callers must do this; nothing previously did). Without this, any
+    consumer that resolves a type_id to a display label -- constraint
+    domain/range signatures land on synthesized parents constantly, since
+    that's exactly what LCA over the hierarchy tends to produce -- falls
+    back to the raw "type_h0007"-style id instead of its verbalized name.
+    Mutates type_vocab in place (same "cheap, idempotent, recompute after
+    loading checkpoints" pattern as update_relation_type_map) and returns it."""
+    for st in hierarchy_result.synthesized_types:
+        if st.type_id in type_vocab.items:
+            continue
+        type_vocab.items[st.type_id] = CanonicalType(
+            item_id=st.type_id,
+            canonical_label=st.canonical_label,
+            surface_forms=[st.canonical_label],
+        )
+        type_vocab.surface_to_id[normalize_label(st.canonical_label)] = st.type_id
+    return type_vocab
 
 
 def _collect_type_surface_forms(triplets: list[dict]) -> list[str]:
@@ -389,6 +529,14 @@ def _collect_type_surface_forms(triplets: list[dict]) -> list[str]:
     return labels
 
 
+def _diff_usage(before: dict, after: dict) -> dict:
+    """Per-step token/cost usage: after - before, for the two
+    LLMTripletExtractor.get_usage_snapshot() calls bracketing one step. A
+    resumed (checkpoint-loaded) step makes no LLM calls, so its diff is
+    correctly all zeros rather than omitted."""
+    return {key: after[key] - before[key] for key in before}
+
+
 def _write_run_metadata(
     run_dir: Path,
     config: PipelineConfig,
@@ -397,7 +545,9 @@ def _write_run_metadata(
     type_vocab: TypeDeduplicationResult,
     hierarchy_result: HierarchyInductionResult,
     entity_vocab: EntityDeduplicationResult,
+    constraints_result: list[RelationConstraint],
     step_durations: dict[str, float],
+    token_usage_by_step: dict[str, dict],
     start_time: datetime,
 ) -> None:
     end_time = datetime.now(timezone.utc)
@@ -413,7 +563,17 @@ def _write_run_metadata(
         "num_hierarchy_edges": len(hierarchy_result.hierarchy.edges),
         "num_hierarchy_roots": len(hierarchy_result.hierarchy.roots),
         "num_canonical_entities": entity_vocab.num_canonical_entities,
+        "num_relation_constraints": len(constraints_result),
+        "num_constraints_by_strength": {
+            strength: sum(1 for c in constraints_result if c.strength.value == strength)
+            for strength in ("hard", "soft", "hint")
+        },
         "step_durations_seconds": step_durations,
+        # Per-step {prompt_tokens, completion_tokens, total_tokens, cost_usd},
+        # computed as a before/after snapshot diff around each step (see
+        # _diff_usage) -- a resumed (checkpoint-loaded) step correctly shows
+        # all zeros, since it made no LLM calls this run.
+        "token_usage_by_step": token_usage_by_step,
         # Full resolved config (LLM model/base_url, embedding model/device/
         # batch size, every step's hyperparameters) so this specific run is
         # reproducible from the metadata file alone. api_key_env only records

@@ -35,7 +35,6 @@ from typing import TYPE_CHECKING
 from src.ontodisco.utils.dedup_base import (
     DeduplicationResult,
     normalize_label,
-    union_find_from_pairs,
 )
 
 if TYPE_CHECKING:
@@ -253,73 +252,15 @@ def describe_relation_context(
     return "often appears with: " + ", ".join(relation_labels)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Pre-LLM candidate expansion — merge clusters whose relation signatures agree
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def _sum_profiles(
-    labels: list[str],
-    profiles: dict[str, dict[str, float]],
-) -> dict[str, float]:
-    """Aggregate per-label profiles into one profile for a whole cluster."""
-    summed: dict[str, float] = defaultdict(float)
-    for label in labels:
-        for dim, weight in profiles.get(label, {}).items():
-            summed[dim] += weight
-    return dict(summed)
-
-
-def merge_clusters_by_relation_signature(
-    clusters: dict[int, list[str]],
-    profiles: dict[str, dict[str, float]],
-    *,
-    threshold: float = 0.8,
-) -> dict[int, list[str]]:
-    """
-    Additionally union HAC clusters whose *cluster-level* relation-signature
-    cosine similarity is >= threshold, even when their label embeddings never
-    put them in the same cluster to begin with. Intended to run as
-    dedup_base.deduplicate()'s cluster_postprocess_fn, right before the
-    (possibly now-larger) clusters go to LLM verification.
-
-    `profiles` is expected to be TF-IDF-weighted (build_type_relation_profiles(
-    ..., weighting="tfidf")) rather than PPMI-weighted: TF-IDF gives a simpler,
-    more conservative similarity for a hard threshold decision than PPMI's
-    log-odds scale.
-
-    Clusters with no relation-context evidence at all are left untouched
-    (never merged on this signal alone) — this can only coarsen clusters
-    further, never split them.
-    """
-    cluster_ids = list(clusters.keys())
-    cluster_profiles = {cid: _sum_profiles(clusters[cid], profiles) for cid in cluster_ids}
-
-    n = len(cluster_ids)
-    pairs: list[tuple[int, int]] = []
-    for i in range(n):
-        profile_i = cluster_profiles[cluster_ids[i]]
-        if not profile_i:
-            continue
-        for j in range(i + 1, n):
-            profile_j = cluster_profiles[cluster_ids[j]]
-            if not profile_j:
-                continue
-            if cosine_sim_sparse(profile_i, profile_j) >= threshold:
-                pairs.append((i, j))
-
-    merge_labels = union_find_from_pairs(n, pairs)
-
-    merged: dict[int, list[str]] = defaultdict(list)
-    for idx, cid in enumerate(cluster_ids):
-        merged[int(merge_labels[idx])].extend(clusters[cid])
-
-    if pairs:
-        logger.info(
-            "Relation-signature merge: %d clusters -> %d clusters (%d cluster-pairs merged, threshold=%.2f)",
-            n, len(merged), len(pairs), threshold,
-        )
-
-    return dict(merged)
+# Cluster-level relation-signature merging (auto-union HAC clusters whose
+# aggregate TF-IDF cosine similarity cleared a threshold, before LLM
+# verification) used to live here. Removed: that job now belongs to
+# hierarchy induction's Weeds-precision pairwise track (Step 3), which
+# catches the same relationally-similar-but-lexically-distant pairs via
+# genuine pairwise LLM verification (including same_concept) rather than a
+# blind cosine-threshold cluster merge -- and synonym identification for
+# label-similar pairs already happens in this step's own HDBSCAN + LLM
+# verification, so this signal was doing the same job twice, less precisely.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

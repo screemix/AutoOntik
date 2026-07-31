@@ -17,6 +17,7 @@ from __future__ import annotations
 import unicodedata
 import logging
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -129,52 +130,6 @@ def normalize_label(label: str) -> str:
     return text
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Union-Find
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def union_find_from_pairs(
-    n: int,
-    pairs: list[tuple[int, int]],
-) -> np.ndarray:
-    """
-    Build connected components from a sparse list of (i, j) pairs
-    using union-find with path compression and union by rank.
-
-    Shared by relation_dedup.py's and entity_dedup.py's FAISS-NN candidate
-    generation, and by relation_context.py's TF-IDF cluster-merge step.
-
-    Returns array of integer cluster labels, shape (N,).
-    """
-    if n <= 1:
-        return np.zeros(n, dtype=int)
-
-    parent = list(range(n))
-    rank = [0] * n
-
-    def find(x: int) -> int:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(x: int, y: int) -> None:
-        px, py = find(x), find(y)
-        if px == py:
-            return
-        if rank[px] < rank[py]:
-            px, py = py, px
-        parent[py] = px
-        if rank[px] == rank[py]:
-            rank[px] += 1
-
-    for i, j in pairs:
-        union(i, j)
-
-    labels = np.array([find(i) for i in range(n)])
-    unique_roots = {r: idx for idx, r in enumerate(sorted(set(labels)))}
-    return np.array([unique_roots[labels[i]] for i in range(n)])
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  HDBSCAN Clustering
@@ -254,6 +209,112 @@ def cluster_hdbscan(
 #  LLM Verification
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _parse_cluster_response(
+    groups: Optional[list],
+    exc: Optional[BaseException],
+    members: list[str],
+    cluster_id,
+) -> list[tuple[str, list[str]]]:
+    """Turn one raw LLM response (or exception) for one cluster into
+    [(canonical_label, [matched_members]), ...], with every fallback
+    verify_clusters_with_llm has always had: a failed call or unparseable
+    response keeps the HDBSCAN grouping as one group; a label the LLM
+    returned but that doesn't match any input member is kept as-is; a
+    member the LLM silently dropped from every group becomes its own
+    singleton. Shared by the normal per-cluster path and the oversized-
+    cluster stitching call below, so both get identical robustness.
+
+    Guarantee: never returns more than len(members) groups, AND never returns
+    a given input member in more than one group -- so the total member count
+    summed across every returned group is always <= len(members) too, not
+    just the group count. This is what lets deduplicate_with_rounds()'s
+    convergence check ("a round produced no further reduction") mean
+    anything -- HDBSCAN partitions each round's pool labels across clusters,
+    so if every cluster's own output is bounded by its own input size, the
+    round's total output is bounded by the round's total input, and pool
+    size can only shrink or hold steady, never grow. (A single cluster
+    ballooning past its own input size, e.g. from double-counting a
+    malformed LLM group once per occurrence instead of once per response,
+    was the actual cause of a pool GROWING round over round in practice --
+    caught and fixed here rather than left as an incidental property. A
+    member listed in TWO groups by a malformed response is the same
+    ballooning failure mode at the member level rather than the group level
+    -- first group to claim a member wins, later duplicates are dropped, not
+    silently double-counted. This matters more once verify_clusters_with_llm's
+    oversized-cluster stitching reuses this same function: there, one
+    "member" being duplicated is a whole sub-batch's worth of real original
+    members, not just one.)
+    """
+    if exc is not None:
+        logger.exception("LLM verification failed for cluster %s, keeping HDBSCAN grouping", cluster_id, exc_info=exc)
+        return [(members[0], members)]
+
+    if not groups:
+        if groups is not None:
+            logger.warning("Could not parse LLM response for cluster %s, keeping HDBSCAN grouping", cluster_id)
+        return [(members[0], members)]
+
+    # Validate every group up front -- a single malformed group (missing
+    # canonical_label/members) makes the whole response's structure
+    # suspect, and partially trusting it risks the fallback below
+    # duplicating members a valid sibling group already claimed. Falling
+    # back once for the whole response, rather than once per malformed
+    # group, is what keeps the "at most len(members) groups" guarantee
+    # unconditional instead of merely typical.
+    for group in groups:
+        if not group.get("canonical_label") or not group.get("members"):
+            logger.warning("Could not parse LLM response for cluster %s, keeping HDBSCAN grouping", cluster_id)
+            return [(members[0], members)]
+
+    result: list[tuple[str, list[str]]] = []
+    claimed: set[str] = set()
+    members_lower = {m.lower(): m for m in members}
+
+    for group in groups:
+        canonical = group["canonical_label"]
+        matched_members = []
+        for gm in group["members"]:
+            gm_lower = gm.lower().strip()
+            if gm_lower in claimed:
+                logger.warning(
+                    "LLM assigned label %r to more than one group for cluster %s; "
+                    "keeping its first assignment, dropping the duplicate",
+                    gm, cluster_id,
+                )
+                continue
+            claimed.add(gm_lower)
+            if gm_lower in members_lower:
+                matched_members.append(members_lower[gm_lower])
+            else:
+                logger.warning(
+                    "LLM returned label %r not matching any cluster %s member %s; "
+                    "keeping LLM form as-is",
+                    gm, cluster_id, members,
+                )
+                matched_members.append(gm)
+        if matched_members:
+            result.append((canonical.lower().strip(), matched_members))
+
+    for member in members:
+        if member.lower().strip() not in claimed:
+            logger.warning("LLM dropped label '%s' from cluster %s, adding as singleton", member, cluster_id)
+            result.append((member, [member]))
+
+    if len(result) > len(members):
+        # Unconditional safety net: whatever pathological shape the LLM's
+        # groups took (e.g. hallucinated extra groups with no real
+        # members), never let this cluster's own output exceed its own
+        # input size -- see the guarantee in the docstring above.
+        logger.warning(
+            "LLM response for cluster %s produced %d groups from %d input members "
+            "(more groups than members); keeping HDBSCAN grouping instead",
+            cluster_id, len(result), len(members),
+        )
+        return [(members[0], members)]
+
+    return result
+
+
 def verify_clusters_with_llm(
     clusters: dict[int, list[str]],
     llm_verifier: object = None,
@@ -262,9 +323,11 @@ def verify_clusters_with_llm(
     token_log_every: int = 10,
     surface_form_type: str = 'entity_type',
     member_context: dict[str, str] | None = None,
+    max_workers: int = 8,
+    max_cluster_size: int = 40,
 ) -> list[tuple[str, list[str]]]:
     """
-    Send each multi-member HAC cluster to the LLM for merge/split verification.
+    Send each multi-member HDBSCAN cluster to the LLM for merge/split verification.
 
     The llm_verifier must implement verify_cluster_with_llm(members: list[str])
     returning a list of dicts with "canonical_label" and "members" keys.
@@ -275,88 +338,201 @@ def verify_clusters_with_llm(
     present in this cluster's list are included in the sub-dict passed down;
     labels with no evidence are simply omitted (not padded with "").
 
+    max_workers: multi-member clusters are independent of each other (no
+    shared mutable state to serialize on, unlike hierarchy_induction.py's
+    node placement), so their LLM calls run concurrently on a
+    ThreadPoolExecutor -- same pattern as induce_hierarchy()'s band-2+
+    placement. Singleton clusters never reach the pool (no LLM call needed).
+
+    max_cluster_size: size-capping + stitching for oversized post-merge
+    clusters (CLAUDE.md §5's "planned extension", implemented here so it
+    applies to relation/type/entity dedup alike, since all three funnel
+    through this one function). Nothing upstream (HDBSCAN, or a
+    cluster_postprocess_fn like relation_context.merge_clusters_by_relation_
+    signature) caps how large a single cluster can grow -- a cluster well
+    past this size produces an oversized prompt that's slow and whose JSON
+    response the LLM is prone to truncating, silently dropping members into
+    accidental singletons rather than making a real merge/split call on
+    them (see the "LLM dropped label" warning above). A cluster over
+    max_cluster_size is split into contiguous alphabetically-sorted
+    sub-batches of at most that size, each resolved independently and
+    concurrently like any other cluster, then reconciled with ONE extra
+    "stitching" call per oversized cluster (skipped if the sub-batches
+    already collapsed to a single group) that treats each sub-batch's own
+    canonical_label as a candidate and asks whether any should be reunified
+    -- they were only split apart by the size cap, not because anything
+    found them unrelated. The split itself doesn't need to be
+    embedding-smart for this to be correct: stitching is what recovers any
+    merge the split's arbitrary boundary would otherwise have missed. If the
+    stitch pool itself would exceed max_cluster_size (a cluster oversized
+    enough that its sub-batches still survive as more than max_cluster_size
+    labels -- meaning most of the original cluster wasn't actually
+    duplicated to begin with, not that a boundary was unlucky), stitching is
+    skipped entirely rather than forced through an equally oversized call:
+    the sub-batch groups are kept as-is, separate. A cluster that size is a
+    sign HDBSCAN over-clustered upstream (see CLAUDE.md L3), not something
+    one more LLM call can meaningfully reconcile.
+
     Returns:
         List of (canonical_label, [member_labels]) tuples.
     """
-    verified_groups: list[tuple[str, list[str]]] = []
     cluster_items = list(clusters.items())
 
-    pbar = tqdm(
-        cluster_items,
-        desc="LLM cluster verify",
-        unit="cluster",
-        disable=not verbose,
-    )
+    # ── Build work items: one per cluster, or several per oversized cluster ──
+    # (origin_idx, work_members) -- origin_idx groups sub-batches back to the
+    # cluster they were split from; phase 2 walks by origin_idx, not by work
+    # item, to keep output order tied to the ORIGINAL cluster order.
+    work_items: list[tuple[int, list[str]]] = []
+    origin_work_indices: dict[int, list[int]] = defaultdict(list)
+    # A trailing sub-batch can end up with exactly one member (e.g. 5 members
+    # split at max_cluster_size=2 -> chunks of 2, 2, 1) -- that's a singleton,
+    # not a candidate cluster, so it's kept out of work_items entirely (no LLM
+    # call) same as any other singleton, and folded back in during phase 2.
+    origin_singletons: dict[int, list[str]] = defaultdict(list)
 
-    for i, (cluster_id, members) in enumerate(pbar, start=1):
-        if len(members) == 1:
-            verified_groups.append((members[0], members))
+    for origin_idx, (cluster_id, members) in enumerate(cluster_items):
+        if len(members) <= 1:
+            continue
+        if len(members) <= max_cluster_size:
+            origin_work_indices[origin_idx].append(len(work_items))
+            work_items.append((origin_idx, members))
         else:
-            try:
+            sub_batches = sorted(members)
+            for start in range(0, len(sub_batches), max_cluster_size):
+                chunk = sub_batches[start:start + max_cluster_size]
+                if len(chunk) == 1:
+                    origin_singletons[origin_idx].append(chunk[0])
+                else:
+                    origin_work_indices[origin_idx].append(len(work_items))
+                    work_items.append((origin_idx, chunk))
+
+    # ── Phase 1: fire every work item's LLM call concurrently ────────────────
+    # Results are collected keyed by work-item index; phase 2 re-groups them
+    # by origin_idx so output order never depends on thread completion timing
+    # (downstream code assigns item IDs via enumerate(verified_groups)).
+    raw_results: dict[int, tuple[Optional[list], Optional[BaseException]]] = {}
+
+    if work_items:
+        pbar = tqdm(
+            total=len(work_items),
+            desc="LLM cluster verify",
+            unit="cluster",
+            disable=not verbose,
+        )
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {}
+            for work_idx, (origin_idx, members) in enumerate(work_items):
                 call_kwargs = {"surface_form_type": surface_form_type}
                 if member_context is not None:
                     call_kwargs["member_context"] = {
                         m: member_context[m] for m in members if m in member_context
                     }
-                groups = llm_verifier.verify_cluster_with_llm(members, **call_kwargs)
-            except Exception:
-                logger.exception("LLM verification failed for cluster %d, keeping HAC grouping", cluster_id)
-                verified_groups.append((members[0], members))
-                groups = None
+                futures[executor.submit(llm_verifier.verify_cluster_with_llm, members, **call_kwargs)] = work_idx
 
-            if groups is not None and not groups:
-                logger.warning("Could not parse LLM response for cluster %d, keeping HAC grouping", cluster_id)
-                verified_groups.append((members[0], members))
-            elif groups:
-                for group in groups:
-                    canonical = group.get("canonical_label", "")
-                    group_members = group.get("members", [])
+            for completed, future in enumerate(as_completed(futures), start=1):
+                work_idx = futures[future]
+                try:
+                    raw_results[work_idx] = (future.result(), None)
+                except Exception as exc:
+                    raw_results[work_idx] = (None, exc)
+                pbar.update(1)
 
-                    if not canonical or not group_members:
-                        logger.warning("Could not parse LLM response for cluster %d, keeping HAC grouping", cluster_id)
-                        verified_groups.append((members[0], members))
-                        continue
+                if (
+                    verbose
+                    and token_log_every > 0
+                    and completed % token_log_every == 0
+                    and llm_verifier is not None
+                    and hasattr(llm_verifier, "calculate_used_tokens")
+                ):
+                    prompt_tokens, completion_tokens = llm_verifier.calculate_used_tokens()
+                    total_tokens = prompt_tokens + completion_tokens
+                    pbar.write(
+                        f"Tokens spent: {total_tokens} "
+                        f"(prompt={prompt_tokens}, completion={completion_tokens})"
+                    )
+        pbar.close()
 
-                    matched_members = []
-                    members_lower = {m.lower(): m for m in members}
+    # ── Phase 2: assemble verified_groups sequentially, in original order,
+    #    stitching any oversized cluster's sub-batches back together ────────
+    verified_groups: list[tuple[str, list[str]]] = []
 
-                    for gm in group_members:
-                        gm_lower = gm.lower().strip()
-                        if gm_lower in members_lower:
-                            matched_members.append(members_lower[gm_lower])
-                        else:
-                            logger.warning(
-                                "LLM returned label %r not matching any cluster %d member %s; "
-                                "keeping LLM form as-is",
-                                gm, cluster_id, members,
-                            )
-                            matched_members.append(gm)
+    for origin_idx, (cluster_id, members) in enumerate(cluster_items):
+        if len(members) == 1:
+            verified_groups.append((members[0], members))
+            continue
 
-                    verified_groups.append((canonical.lower().strip(), matched_members))
+        work_indices = origin_work_indices[origin_idx]
+        singleton_chunks = origin_singletons.get(origin_idx, [])
+        sub_results: list[tuple[str, list[str]]] = []
+        for work_idx in work_indices:
+            _, work_members = work_items[work_idx]
+            groups, exc = raw_results[work_idx]
+            sub_results.extend(_parse_cluster_response(groups, exc, work_members, cluster_id))
+        # Trailing singleton chunks (e.g. 5 members split at max_cluster_size=2
+        # -> chunks of 2, 2, 1) never got their own LLM call, but they were
+        # still split off from the rest of the cluster purely by the size cap
+        # -- fold them in as their own sub-group so stitching below gets a
+        # chance to reunite them with a real sub-batch group, same as any
+        # other sub-group.
+        for label in singleton_chunks:
+            sub_results.append((label, [label]))
 
-                all_assigned = set()
-                for group in groups:
-                    for gm in group.get("members", []):
-                        all_assigned.add(gm.lower().strip())
+        if len(work_indices) + len(singleton_chunks) <= 1 or len(sub_results) <= 1:
+            # Not oversized (one work item covered the whole cluster, with no
+            # trailing singleton chunk), or everything collapsed to a single
+            # group -- nothing to stitch either way.
+            verified_groups.extend(sub_results)
+            continue
 
-                for member in members:
-                    if member.lower().strip() not in all_assigned:
-                        logger.warning("LLM dropped label '%s' from cluster %d, adding as singleton", member, cluster_id)
-                        verified_groups.append((member, [member]))
+        label_to_members: dict[str, list[str]] = {}
+        for canonical, sub_members in sub_results:
+            key = canonical.lower().strip()
+            if key in label_to_members:
+                label_to_members[key] = label_to_members[key] + sub_members
+            else:
+                label_to_members[key] = sub_members
 
-        if (
-            verbose
-            and token_log_every > 0
-            and i % token_log_every == 0
-            and llm_verifier is not None
-            and hasattr(llm_verifier, "calculate_used_tokens")
-        ):
-            prompt_tokens, completion_tokens = llm_verifier.calculate_used_tokens()
-            total_tokens = prompt_tokens + completion_tokens
-            pbar.write(
-                f"Tokens spent: {total_tokens} "
-                f"(prompt={prompt_tokens}, completion={completion_tokens})"
+        stitch_labels = list(label_to_members.keys())
+        if len(stitch_labels) > max_cluster_size:
+            # The stitch pool itself can exceed max_cluster_size -- a big
+            # enough oversized cluster survives its sub-batches as more than
+            # max_cluster_size labels (e.g. 2249 members -> 57 sub-batches ->
+            # 1050 surviving labels). Forcing all of them through one stitch
+            # call recreates exactly the oversized/slow/truncation-prone
+            # call this whole mechanism exists to avoid. A stitch pool this
+            # large also means most of the original cluster wasn't actually
+            # duplicated -- HDBSCAN over-clustered upstream (CLAUDE.md L3),
+            # not a case of a merge lost at an unlucky split boundary. Skip
+            # stitching outright rather than force it: keep the sub-batch
+            # groups separate.
+            logger.warning(
+                "Cluster %s: size %d over max_cluster_size=%d, split into %d sub-batches -> "
+                "%d surviving sub-groups, which itself exceeds max_cluster_size -- skipping "
+                "stitching, keeping sub-groups separate",
+                cluster_id, len(members), max_cluster_size, len(work_indices), len(sub_results),
             )
+            verified_groups.extend(sub_results)
+            continue
+
+        logger.info(
+            "Cluster %s: size %d over max_cluster_size=%d, split into %d sub-batches -> "
+            "%d sub-groups, stitching",
+            cluster_id, len(members), max_cluster_size, len(work_indices), len(sub_results),
+        )
+        try:
+            stitch_groups = llm_verifier.verify_cluster_with_llm(
+                stitch_labels, surface_form_type=surface_form_type,
+            )
+            stitch_exc = None
+        except Exception as exc:
+            stitch_groups, stitch_exc = None, exc
+
+        stitched = _parse_cluster_response(stitch_groups, stitch_exc, stitch_labels, f"{cluster_id}.stitch")
+        for canonical, matched_labels in stitched:
+            reunited: list[str] = []
+            for label in matched_labels:
+                reunited.extend(label_to_members.get(label.lower().strip(), [label]))
+            verified_groups.append((canonical, reunited))
 
     return verified_groups
 
@@ -364,6 +540,37 @@ def verify_clusters_with_llm(
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Base Deduplication Pipeline
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def _normalize_and_count(
+    all_labels: list[str],
+    normalizer: Callable[[str], str],
+) -> tuple[list[str], dict[str, set[str]], dict[str, int], dict[str, int]]:
+    """Shared "Step 1" of deduplicate(): normalise raw labels and compute
+    per-normalized-label frequency statistics. Used by both deduplicate()
+    and deduplicate_with_rounds() (which needs the same bookkeeping outside
+    of a single deduplicate() call, to survive across multiple rounds).
+
+    Returns (unique_labels, normalized_to_raws, count_per_normalized, surface_form_counts).
+    """
+    normalized_to_raws: dict[str, set[str]] = defaultdict(set)
+    surface_form_counts: dict[str, int] = defaultdict(int)
+    count_per_normalized: dict[str, int] = defaultdict(int)
+
+    for label in all_labels:
+        norm = normalizer(label)
+        normalized_to_raws[norm].add(label)
+        surface_form_counts[label] += 1
+        count_per_normalized[norm] += 1
+
+    unique_labels = sorted(normalized_to_raws.keys())
+
+    logger.info(
+        "After normalisation: %d unique labels (from %d raw labels)",
+        len(unique_labels), len(set(all_labels)),
+    )
+
+    return unique_labels, normalized_to_raws, count_per_normalized, surface_form_counts
+
 
 def deduplicate(
     all_labels: list[str],
@@ -381,6 +588,8 @@ def deduplicate(
     id_prefix: str = "item",
     id_width: int = 4,
     build_item: Callable[[str, str, list[str], int, dict[str, int]], CanonicalItem] | None = None,
+    max_workers: int = 8,
+    max_cluster_size: int = 40,
 ) -> DeduplicationResult:
     """
     Shared deduplication pipeline: normalise → embed → cluster → LLM verify → build result.
@@ -424,27 +633,16 @@ def deduplicate(
                              Signature: (item_id, canonical_label, surface_forms,
                              mention_count, surface_form_counts) → CanonicalItem.
                              If None, builds a default CanonicalItem.
+        max_workers:         Thread pool size for concurrent LLM cluster
+                             verification (see verify_clusters_with_llm).
 
     Returns:
         DeduplicationResult with canonical items, surface form mappings,
         and per-surface-form frequency statistics.
     """
     # ── Step 1: Normalise and compute frequency statistics ────────────────────
-    normalized_to_raws: dict[str, set[str]] = defaultdict(set)
-    surface_form_counts: dict[str, int] = defaultdict(int)
-    count_per_normalized: dict[str, int] = defaultdict(int)
-
-    for label in all_labels:
-        norm = normalizer(label)
-        normalized_to_raws[norm].add(label)
-        surface_form_counts[label] += 1
-        count_per_normalized[norm] += 1
-
-    unique_labels = sorted(normalized_to_raws.keys())
-
-    logger.info(
-        "After normalisation: %d unique labels (from %d raw labels)",
-        len(unique_labels), len(set(all_labels)),
+    unique_labels, normalized_to_raws, count_per_normalized, surface_form_counts = (
+        _normalize_and_count(all_labels, normalizer)
     )
 
     # ── Degenerate case: 0 or 1 unique labels ────────────────────────────────
@@ -521,7 +719,8 @@ def deduplicate(
     if llm_verifier is not None:
         verified_groups = verify_clusters_with_llm(
             clusters, llm_verifier, surface_form_type=surface_form_type,
-            member_context=member_context,
+            member_context=member_context, max_workers=max_workers,
+            max_cluster_size=max_cluster_size,
         )
     else:
         verified_groups: list[tuple[str, list[str]]] = []
@@ -529,6 +728,29 @@ def deduplicate(
             verified_groups.append((members[0], members))
 
     # ── Step 5: Build result ─────────────────────────────────────────────────
+    return _assemble_dedup_result(
+        verified_groups, normalized_to_raws=normalized_to_raws,
+        count_per_normalized=count_per_normalized, surface_form_counts=surface_form_counts,
+        num_raw=len(unique_labels), id_prefix=id_prefix, id_width=id_width, build_item=build_item,
+    )
+
+
+def _assemble_dedup_result(
+    verified_groups: list[tuple[str, list[str]]],
+    *,
+    normalized_to_raws: dict[str, set[str]],
+    count_per_normalized: dict[str, int],
+    surface_form_counts: dict[str, int],
+    num_raw: int,
+    id_prefix: str,
+    id_width: int,
+    build_item: Callable[[str, str, list[str], int, dict[str, int]], CanonicalItem] | None,
+) -> DeduplicationResult:
+    """Shared "Step 5" of deduplicate(): turn (canonical_label, [normalized
+    members]) groups plus the Step-1 normalisation bookkeeping into a full
+    DeduplicationResult. Used by both deduplicate() (single pass) and
+    deduplicate_with_rounds() (after all rounds have converged), so the
+    result-shape logic exists in exactly one place."""
     items: dict[str, CanonicalItem] = {}
     surface_to_id: dict[str, str] = {}
 
@@ -561,19 +783,154 @@ def deduplicate(
         surface_to_id[canonical_label] = item_id
 
     num_canonical = len(items)
-    reduction = (1 - num_canonical / max(len(unique_labels), 1)) * 100
+    reduction = (1 - num_canonical / max(num_raw, 1)) * 100
 
     logger.info(
         "Deduplication complete: %d → %d canonical items (%.1f%% reduction)",
-        len(unique_labels), num_canonical, reduction,
+        num_raw, num_canonical, reduction,
     )
 
     return DeduplicationResult(
         items=items,
         surface_to_id=surface_to_id,
-        num_raw=len(unique_labels),
+        num_raw=num_raw,
         num_canonical=num_canonical,
         reduction_pct=reduction,
         normalized_to_raws=dict(normalized_to_raws),
         surface_form_counts=dict(surface_form_counts),
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Round-Based Deduplication (convergence loop)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def deduplicate_with_rounds(
+    all_labels: list[str],
+    embedder: ContrieverEmbedder,
+    llm_verifier = None,
+    surface_form_type: str = 'entity_type',
+    *,
+    normalizer: Callable[[str], str] = normalize_label,
+    embedding_text_fn: Callable[[str], str] | None = None,
+    cluster_fn: Callable[[np.ndarray], np.ndarray] | None = None,
+    cluster_postprocess_fn: Callable[[dict[int, list[str]]], dict[int, list[str]]] | None = None,
+    member_context: dict[str, str] | None = None,
+    hac_threshold: float = 0.8,
+    embed_batch_size: int = 64,
+    id_prefix: str = "item",
+    id_width: int = 4,
+    build_item: Callable[[str, str, list[str], int, dict[str, int]], CanonicalItem] | None = None,
+    max_workers: int = 8,
+    max_cluster_size: int = 40,
+    max_rounds: int = 1,
+) -> DeduplicationResult:
+    """
+    Round-based generalization of deduplicate(): normalise once, then
+    repeatedly embed -> cluster -> LLM-verify the current pool of surviving
+    canonical labels, folding merges back in, until a round produces no
+    further reduction in pool size (nothing left to merge) or max_rounds is
+    reached. Same convergence rule entity_dedup._run_partition_merge_rounds
+    already uses per parent-partition (a merge in round N can pull two
+    labels' embeddings close enough to only become clusterable in round
+    N+1) -- generalized here off entity_dedup's compound "name [type]"
+    labels to plain labels, so type_dedup and relation_dedup can use it too.
+
+    No new LLM-facing signal is needed for convergence: "a round produced no
+    further reduction" is a pure pool-size check, exactly like entity_dedup's
+    existing loop. max_rounds=1 behaves identically to deduplicate().
+
+    All other args have the same meaning as deduplicate() -- see its
+    docstring.
+    """
+    unique_labels, normalized_to_raws, count_per_normalized, surface_form_counts = (
+        _normalize_and_count(all_labels, normalizer)
+    )
+
+    if len(unique_labels) < 2:
+        # Degenerate case identical to deduplicate()'s early return -- just
+        # delegate rather than duplicate it.
+        return deduplicate(
+            all_labels, embedder, llm_verifier, surface_form_type,
+            normalizer=normalizer, embedding_text_fn=embedding_text_fn,
+            cluster_fn=cluster_fn, cluster_postprocess_fn=cluster_postprocess_fn,
+            member_context=member_context, hac_threshold=hac_threshold,
+            embed_batch_size=embed_batch_size, id_prefix=id_prefix, id_width=id_width,
+            build_item=build_item, max_workers=max_workers, max_cluster_size=max_cluster_size,
+        )
+
+    # pool: current canonical label -> set of ORIGINAL round-1 normalized
+    # labels folded into it so far (keys into normalized_to_raws /
+    # count_per_normalized / surface_form_counts, established once above and
+    # never recomputed -- only the grouping into pool entries changes).
+    pool: dict[str, set[str]] = {label: {label} for label in unique_labels}
+
+    for round_num in range(1, max(max_rounds, 1) + 1):
+        if len(pool) < 2:
+            break
+
+        pool_labels = sorted(pool.keys())
+        if embedding_text_fn is not None:
+            texts = [embedding_text_fn(label) for label in pool_labels]
+        else:
+            texts = pool_labels
+        embeddings = embedder.embed(texts, batch_size=embed_batch_size)
+
+        if cluster_fn is not None:
+            cluster_labels = cluster_fn(embeddings)
+        else:
+            cluster_labels = cluster_hdbscan(embeddings, threshold=hac_threshold)
+
+        clusters: dict[int, list[str]] = defaultdict(list)
+        for label, cl in zip(pool_labels, cluster_labels):
+            clusters[int(cl)].append(label)
+        clusters = dict(clusters)
+
+        if cluster_postprocess_fn is not None:
+            clusters = cluster_postprocess_fn(clusters)
+
+        if all(len(members) == 1 for members in clusters.values()):
+            logger.info("deduplicate_with_rounds round %d: no candidate clusters, stopping", round_num)
+            break
+
+        if llm_verifier is not None:
+            verified_groups = verify_clusters_with_llm(
+                clusters, llm_verifier, surface_form_type=surface_form_type,
+                member_context=member_context, max_workers=max_workers,
+                max_cluster_size=max_cluster_size,
+            )
+        else:
+            verified_groups = [(members[0], members) for members in clusters.values()]
+
+        # Fold this round's merges into a fresh pool, keyed by the (possibly
+        # re-chosen) canonical label. Two independently-resolved groups
+        # landing on the identical canonical_label string are unioned rather
+        # than treated as a key collision -- a reasonable outcome (they'll
+        # almost certainly re-cluster next round anyway, since identical
+        # text embeds identically), and avoids ever using a disambiguated
+        # key as a real canonical label.
+        next_pool: dict[str, set[str]] = defaultdict(set)
+        for canonical_label, members in verified_groups:
+            merged_raws: set[str] = set()
+            for m in members:
+                merged_raws |= pool.get(m, {m})
+            next_pool[canonical_label] |= merged_raws
+        next_pool = dict(next_pool)
+
+        progressed = len(next_pool) < len(pool)
+        logger.info(
+            "deduplicate_with_rounds round %d: %d -> %d canonical labels",
+            round_num, len(pool), len(next_pool),
+        )
+        pool = next_pool
+        if not progressed:
+            break
+    else:
+        logger.info("deduplicate_with_rounds reached max_rounds=%d, stopping", max_rounds)
+
+    verified_groups = [(label, sorted(raws)) for label, raws in pool.items()]
+    return _assemble_dedup_result(
+        verified_groups, normalized_to_raws=normalized_to_raws,
+        count_per_normalized=count_per_normalized, surface_form_counts=surface_form_counts,
+        num_raw=len(unique_labels), id_prefix=id_prefix, id_width=id_width, build_item=build_item,
     )

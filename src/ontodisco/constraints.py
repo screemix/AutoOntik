@@ -53,6 +53,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
 from src.ontodisco.utils.dedup_base import normalize_label
+from src.ontodisco.hierarchy_induction import ancestor_path, lowest_common_ancestor
 
 if TYPE_CHECKING:
     from src.ontodisco.hierarchy_induction import TypeHierarchy
@@ -231,47 +232,14 @@ def _apply_direction(
 #  Stage 2 — Hierarchy generalization (exact LCA, no threshold)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _ancestor_path(type_id: str, hierarchy: "TypeHierarchy") -> list[str]:
-    """Leaf-to-root ancestor chain for type_id (type_id itself first),
-    following hierarchy.parents (single parent per type -- a forest)."""
-    path = [type_id]
-    seen = {type_id}
-    current = type_id
-    while current in hierarchy.parents:
-        parents = hierarchy.parents[current]
-        if not parents:
-            break
-        current = parents[0]
-        if current in seen:
-            break  # defensive only: the hierarchy is acyclic by construction
-        seen.add(current)
-        path.append(current)
-    return path
-
-
-def _lca(type_ids: set[str], hierarchy: "TypeHierarchy") -> Optional[str]:
-    """Most specific ancestor common to every type in type_ids, or None if
-    they don't all share one (disconnected trees of the hierarchy forest)."""
-    if not type_ids:
-        return None
-    if len(type_ids) == 1:
-        return next(iter(type_ids))
-
-    paths = [_ancestor_path(t, hierarchy) for t in type_ids]
-    common = set(paths[0])
-    for path in paths[1:]:
-        common &= set(path)
-    if not common:
-        return None
-
-    for node in paths[0]:  # leaf-to-root order -> first hit is the deepest
-        if node in common:
-            return node
-    return None  # unreachable: paths[0][-1] is always in common if common is non-empty
+# ancestor_path / lowest_common_ancestor live in hierarchy_induction.py (that's
+# where TypeHierarchy itself is defined) -- entity_dedup.py needs the same LCA
+# walk for its primary_type_id field, so it's a shared helper rather than a
+# constraints.py-private one.
 
 
 def _root_of(type_id: str, hierarchy: "TypeHierarchy") -> str:
-    return _ancestor_path(type_id, hierarchy)[-1]
+    return ancestor_path(type_id, hierarchy)[-1]
 
 
 def _generalize_to_signature_map(
@@ -289,7 +257,7 @@ def _generalize_to_signature_map(
     if not observed_types:
         return {}
 
-    lca = _lca(observed_types, hierarchy)
+    lca = lowest_common_ancestor(observed_types, hierarchy)
     if lca is not None:
         return {t: lca for t in observed_types}
 
@@ -299,7 +267,7 @@ def _generalize_to_signature_map(
 
     signature_map: dict[str, str] = {}
     for members in by_root.values():
-        partition_lca = _lca(members, hierarchy)  # always resolves: members share their root
+        partition_lca = lowest_common_ancestor(members, hierarchy)  # always resolves: members share their root
         for t in members:
             signature_map[t] = partition_lca
     return signature_map

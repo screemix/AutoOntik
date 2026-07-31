@@ -2,7 +2,7 @@
 Render an induced TypeHierarchy as a single self-contained, searchable HTML file.
 
 Reads the pickled checkpoints written by src/ontodisco/pipeline.py
-(output_dir/checkpoints/type_dedup.pkl and .../hierarchy_induction_giga.pkl)
+(output_dir/checkpoints/run_<n>/type_dedup.pkl and .../hierarchy_induction.pkl)
 and emits a static HTML page with a collapsible forest view: each of the
 (often 1000+) hierarchy roots is a top-level collapsed node; opening one
 reveals its subtree. A search box filters the whole forest by label
@@ -11,7 +11,11 @@ substring and auto-expands the path to every match.
 No server, no external JS/CSS -- open the output file directly in a browser.
 
 Usage:
+    # Uses the most recent run_<n> under output/checkpoints/
     python scripts/visualize_hierarchy.py --output-dir output --out output/hierarchy_viz.html
+
+    # Pin a specific run
+    python scripts/visualize_hierarchy.py --output-dir output --run 3
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import pickle
+import re
 import sys
 from pathlib import Path
 
@@ -26,9 +31,30 @@ from pathlib import Path
 # unpickling needs that package importable regardless of the caller's cwd.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+_RUN_DIR_RE = re.compile(r"^run_(\d+)$")
 
-def _load_checkpoint(output_dir: Path, name: str):
-    path = output_dir / "checkpoints" / f"{name}.pkl"
+
+def _resolve_run_dir(output_dir: Path, run: int | None) -> Path:
+    checkpoints_root = output_dir / "checkpoints"
+    if run is not None:
+        run_dir = checkpoints_root / f"run_{run}"
+        if not run_dir.is_dir():
+            raise FileNotFoundError(f"No such run directory: {run_dir}")
+        return run_dir
+
+    numbers = []
+    if checkpoints_root.exists():
+        for child in checkpoints_root.iterdir():
+            m = _RUN_DIR_RE.match(child.name)
+            if child.is_dir() and m:
+                numbers.append(int(m.group(1)))
+    if not numbers:
+        raise FileNotFoundError(f"No run_<n> directories found under {checkpoints_root}")
+    return checkpoints_root / f"run_{max(numbers)}"
+
+
+def _load_checkpoint(run_dir: Path, name: str):
+    path = run_dir / f"{name}.pkl"
     with open(path, "rb") as f:
         return pickle.load(f)
 
@@ -322,18 +348,20 @@ def render_html(tree: list[dict]) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", default="output", help="Pipeline output_dir containing checkpoints/")
+    parser.add_argument("--run", type=int, default=None, help="Run number under checkpoints/run_<n> (default: most recent)")
     parser.add_argument("--out", default=None, help="Path to write the HTML file (default: <output-dir>/hierarchy_viz.html)")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
     out_path = Path(args.out) if args.out else output_dir / "hierarchy_viz.html"
+    run_dir = _resolve_run_dir(output_dir, args.run)
 
-    type_vocab = _load_checkpoint(output_dir, "type_dedup")
-    hierarchy_result = _load_checkpoint(output_dir, "hierarchy_induction_giga")
+    type_vocab = _load_checkpoint(run_dir, "type_dedup")
+    hierarchy_result = _load_checkpoint(run_dir, "hierarchy_induction")
 
     tree = build_tree(hierarchy_result, type_vocab)
     out_path.write_text(render_html(tree), encoding="utf-8")
-    print(f"Wrote {out_path} ({len(tree)} roots, open it directly in a browser)")
+    print(f"Wrote {out_path} ({len(tree)} roots, from {run_dir}, open it directly in a browser)")
 
 
 if __name__ == "__main__":

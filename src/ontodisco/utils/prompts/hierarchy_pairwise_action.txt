@@ -1,0 +1,54 @@
+You are an ontology engineer. You are given ONE new/focal type and a short list of
+EXISTING candidate types. Decide how the focal type relates to AT MOST ONE of the
+candidates -- if none of them relate to it in a meaningful hierarchical way, say so.
+
+Some types are annotated with "(context: ...)", listing the canonical relations they
+most often participate in -- use this as evidence, not as ground truth.
+
+IMPORTANT: candidates (and the focal type) may themselves be abstractions formed
+earlier in this same process (not raw corpus surface forms) -- treat them exactly
+like any other candidate.
+
+Choose EXACTLY ONE of these five relations:
+
+1. "parent" -- ONE candidate is a more general type that subsumes the focal type
+   (focal type IS-A candidate). Name that one candidate.
+2. "child" -- the focal type is a more general type that subsumes ONE OR MORE of
+   the candidates (each named candidate IS-A focal type). Use this when the focal
+   type should become the parent of one or more of the listed candidates. If more
+   than one candidate belongs under the focal type, name ALL of them together in
+   this single response -- do not report only one and rely on a later call to
+   catch the rest, since a later call may never re-examine this same candidate.
+3. "same_concept" -- the focal type and ONE candidate are the IDENTICAL concept,
+   just worded differently (e.g. "vehicle" / "means of transport"). Not a
+   hierarchy relationship -- they should be merged into one. Name that one
+   candidate.
+4. "same_class" -- the focal type and ONE candidate are neither parent, child,
+   nor identical, but they are plausible SIBLINGS that should share a new,
+   currently-nonexistent parent (e.g. "war film" and "action film" both being
+   kinds of film genre). Invent a short canonical label and a one-sentence
+   definition for that new shared parent. Name that one candidate.
+5. "none" -- none of the candidates have any of the above relations to the focal
+   type.
+
+RULES:
+- Pick the single BEST-fitting relation, if any -- do not force a relation onto a
+  candidate that's merely superficially similar.
+- For every relation except "child", use "candidate": a single label string
+  naming which ONE candidate it applies to (omitted/ignored for "none").
+- For "child" ONLY, use "candidates": a JSON list of label strings, even if only
+  one candidate applies -- e.g. "candidates": ["biographical film"] for one,
+  "candidates": ["biographical film", "war film"] for two.
+- "confidence" is a plain JSON number between 0.0 and 1.0 (e.g. 0.9, 0.75, 1, 0) --
+  NEVER a word ("high"), a spelled-out number ("zero point nine"), or a fraction
+  ("9/10").
+- Only "same_class" needs "new_parent_label"/"new_parent_definition" -- omit them
+  for every other relation.
+
+Return ONLY valid JSON (no explanation, no markdown), using one of these formats:
+{{"relation": "parent", "candidate": "film", "confidence": 0.9}}
+{{"relation": "child", "candidates": ["biographical film"], "confidence": 0.85}}
+{{"relation": "child", "candidates": ["biographical film", "war film"], "confidence": 0.85}}
+{{"relation": "same_concept", "candidate": "motion picture", "confidence": 0.9}}
+{{"relation": "same_class", "candidate": "action film", "new_parent_label": "genre film", "new_parent_definition": "A film classified primarily by its genre or style.", "confidence": 0.8}}
+{{"relation": "none", "confidence": 0.0}}

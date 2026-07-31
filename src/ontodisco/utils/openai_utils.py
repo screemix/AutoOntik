@@ -15,6 +15,7 @@ import logging
 import sys
 import json
 import re
+import threading
 from pathlib import Path
 from typing import Dict, List, Union, Optional
 import tenacity
@@ -78,9 +79,8 @@ class LLMTripletExtractor:
                 "cluster_entity_types": "cluster_entity_types.txt",
                 "cluster_entity_names": "cluster_entity_names.txt",
                 "cluster_relations": "cluster_relations.txt",
-                "hierarchy_cluster_action": "hierarchy_cluster_action.txt",
+                "hierarchy_pairwise_action": "hierarchy_pairwise_action.txt",
                 "relation_direction": "relation_direction.txt",
-                "hierarchy_label_disambiguation": "hierarchy_label_disambiguation.txt",
             }
 
         # Load all prompts (paths may include subfolders, e.g. triplet_extraction/foo.txt)
@@ -99,6 +99,12 @@ class LLMTripletExtractor:
         self.prompt_tokens_num = 0
         self.completion_tokens_num = 0
         self.current_cost = 0
+        # get_completion() is called from multiple threads once dedup_base's
+        # verify_clusters_with_llm / hierarchy_induction's band placement run
+        # concurrently -- the plain `+=` below is a read-modify-write across
+        # three attributes and isn't atomic under the GIL, so concurrent
+        # callers can lose updates without this lock.
+        self._token_lock = threading.Lock()
         self.save_messages = save_messages
         self._refine_attempt = 0
         self._prev_error = None  # store previous exception
@@ -116,32 +122,47 @@ class LLMTripletExtractor:
 
     def extract_json(self, text: str) -> Union[dict, list, str]:
         """Extract JSON from text, handling both code blocks and inline JSON."""
-        patterns = [
-            r"```json\s*(\{.*?\}|\[.*?\])\s*```",  # JSON in code blocks
-            r"(\{.*?\}|\[.*?\])",  # Inline JSON
-        ]
+        fenced_pattern = r"```json\s*(\{.*?\}|\[.*?\])\s*```"  # JSON in code blocks
+
+        logger.log(logging.DEBUG, "LLM Output: %s", text)
 
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             pass
 
-        for pattern in patterns:
-            match = re.search(pattern, text, re.DOTALL)
-            if match:
-                try:
-                    return json.loads(match.group(1))
-                except json.JSONDecodeError:
-                    logger.error("Failed to parse JSON: %s", text)
+        match = re.search(fenced_pattern, text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                logger.error("Failed to parse fenced JSON block: %s", text)
+
+        # Inline JSON (no code fence): `(\{.*?\}|\[.*?\])` used to be tried
+        # here too, but a non-greedy brace match has nothing forcing it to
+        # backtrack past the FIRST closing brace it finds -- for nested
+        # JSON (e.g. {"triplets": [{...}, {...}]}), that's the first
+        # triplet's closing brace, not the outer object's, so the captured
+        # substring was truncated and json.loads always failed on it.
+        # json.JSONDecoder.raw_decode() parses however much valid JSON
+        # starts at the given position and tells us where it ends, so it
+        # isn't fooled by nested braces the way the regex was.
+        start = next((i for i, ch in enumerate(text) if ch in "{["), None)
+        if start is not None:
+            try:
+                obj, _ = json.JSONDecoder().raw_decode(text, start)
+                return obj
+            except json.JSONDecodeError:
+                logger.error("Failed to parse inline JSON: %s", text)
 
         return text
 
-    # @retry(
-    #     wait=wait_random_exponential(multiplier=1, max=60),
-    #     before_sleep=before_sleep_log(logger, logging.ERROR),
-    #     stop=stop_after_attempt(5),
-    # )
-    @tenacity.retry(stop=stop_after_attempt(5), reraise=True)
+    @retry(
+        wait=wait_random_exponential(multiplier=1, max=60),
+        before_sleep=before_sleep_log(logger, logging.ERROR),
+        stop=stop_after_attempt(5),
+    )
+    # @tenacity.retry(stop=stop_after_attempt(5), reraise=True)
     def get_completion(
         self, system_prompt: str, user_prompt: str, transform_to_json: bool = True
     ) -> Union[dict, list, str]:
@@ -160,12 +181,13 @@ class LLMTripletExtractor:
         response = self.client.chat.completions.create(
             model=self.model, messages=messages, temperature=0
         )
-        self.completion_tokens_num += response.usage.completion_tokens
-        self.prompt_tokens_num += response.usage.prompt_tokens
-        self.current_cost += (
-            response.usage.completion_tokens * self.output_price
-            + response.usage.prompt_tokens * self.input_price
-        )
+        with self._token_lock:
+            self.completion_tokens_num += response.usage.completion_tokens
+            self.prompt_tokens_num += response.usage.prompt_tokens
+            self.current_cost += (
+                response.usage.completion_tokens * self.output_price
+                + response.usage.prompt_tokens * self.input_price
+            )
 
         content = response.choices[0].message.content.strip()
         logger.debug("Output content: %s\n%s", str(content), "-" * 100)
@@ -254,127 +276,78 @@ class LLMTripletExtractor:
 
         return groups
 
-    def resolve_hierarchy_cluster(
-        self, members: list[str],
-        member_context: Optional[Dict[str, str]] = None,
-    ) -> list[dict]:
-        """Ask the LLM to organise one cluster of type labels into subClassOf
-        groups, for hierarchy induction (see hierarchy_induction.py).
+    def resolve_hierarchy_relation(
+        self, focal_label: str, candidate_labels: list[str],
+        focal_context: str = "", candidate_context: Optional[Dict[str, str]] = None,
+    ) -> dict:
+        """Ask the LLM how one focal type relates to a batch of existing
+        candidate types (see hierarchy_induction.py's
+        _resolve_with_batched_escalation, which calls this once per
+        similarity-ranked batch of candidates).
 
-        members: candidate labels in this cluster. May include labels that are
-        themselves an abstraction formed in an earlier round of the same
-        recursive process, not just raw corpus surface forms.
-        member_context: optional label -> relation-signature evidence string
-        (e.g. "directed, produced, starred in"), shown alongside each
-        candidate so the LLM has concrete distributional evidence.
-
-        Returns the raw "groups" list from the LLM response (each a dict with
-        "action" ["merge"|"no_parent"|"same_concept"], "members", and for
-        merges "parent"/"parent_is_new"/"parent_definition"/"confidence").
-        "same_concept" groups have no "parent" -- they mark members as the
-        identical concept under different wording, to be collapsed rather
-        than given a hierarchy edge. The caller is responsible for validating
-        group contents and mapping labels back to type_ids.
+        Returns a dict with "relation" in
+        {"parent", "child", "same_concept", "same_class", "none"}. For every
+        relation except "child", the chosen candidate is under "candidate"
+        (a single label string, omitted/ignored for "none"). For "child",
+        the focal type may subsume MORE THAN ONE candidate at once (CLAUDE.md
+        §16.2.2's "return a set, not a single child" requirement -- without
+        this, a focal node that should retroactively absorb two existing
+        siblings would only catch one per placement call, since nothing
+        guarantees a later call ever re-examines the one left behind) --
+        normalized here into "candidates" (always a list), regardless of
+        whether the LLM used the singular "candidate" or plural "candidates"
+        key in its raw JSON.
+        Also includes "confidence", and -- only for "same_class" --
+        "new_parent_label"/"new_parent_definition".
+        Returns {"relation": "none"} on any unparseable response, never raises.
         """
-        system_prompt = self.prompts["hierarchy_cluster_action"]
+        system_prompt = self.prompts["hierarchy_pairwise_action"]
 
-        if member_context:
+        focal_str = focal_label
+        if focal_context:
+            focal_str = f"{focal_label} (context: {focal_context})"
+
+        if candidate_context:
             candidates_str = ", ".join(
-                f"{m} (context: {member_context[m]})" if member_context.get(m) else m
-                for m in members
+                f"{c} (context: {candidate_context[c]})" if candidate_context.get(c) else c
+                for c in candidate_labels
             )
         else:
-            candidates_str = ", ".join(members)
+            candidates_str = ", ".join(candidate_labels)
 
-        response = self.get_completion(
-            system_prompt=system_prompt, user_prompt=f"Types: {candidates_str}"
-        )
+        user_prompt = f"Focal type: {focal_str}\nExisting candidates: {candidates_str}"
 
-        logger.log(logging.DEBUG, f"Input: {members}")
+        try:
+            response = self.get_completion(system_prompt=system_prompt, user_prompt=user_prompt)
+        except Exception:
+            logger.exception("resolve_hierarchy_relation: LLM call failed")
+            return {"relation": "none"}
+
+        logger.log(logging.DEBUG, f"Input: focal={focal_label!r} candidates={candidate_labels!r}")
         logger.log(logging.DEBUG, f"Response: {response}")
 
-        if isinstance(response, str):
-            logger.warning("resolve_hierarchy_cluster: LLM returned unparseable string")
-            return []
-
-        groups = response.get("groups", [])
-        if not groups:
-            logger.warning("resolve_hierarchy_cluster: LLM response had no 'groups' key")
-
-        return groups
-
-    def disambiguate_duplicate_labels(
-        self, groups: list[Dict],
-    ) -> Dict[str, list[list[str]]]:
-        """
-        Ask the LLM to partition candidate type nodes that share an identical
-        label into same-concept clusters (see hierarchy_induction.py's
-        _reconcile_duplicate_labels -- called only for the subset of
-        duplicate-labeled groups whose relation-argument profiles couldn't
-        already confirm or deny sameness on their own).
-
-        groups: list of {"label": str, "candidates": [{"id", "definition",
-        "relation_context"}, ...]}.
-
-        Returns label -> list of clusters (each a list of candidate ids).
-        Falls back to "every candidate is its own cluster" (i.e. no merge)
-        for any label missing from the response, or any candidate id the
-        response dropped -- an unconfirmed merge is a worse failure mode
-        here than a leftover duplicate, which just gets re-tried next round.
-        """
-        system_prompt = self.prompts["hierarchy_label_disambiguation"]
-        payload = [
-            {
-                "label": group["label"],
-                "candidates": [
-                    {"id": c["id"], "definition": c.get("definition", ""),
-                     "relation_context": c.get("relation_context", "")}
-                    for c in group["candidates"]
-                ],
-            }
-            for group in groups
-        ]
-        response = self.get_completion(
-            system_prompt=system_prompt, user_prompt=f"Groups: {json.dumps(payload)}"
-        )
-
-        logger.log(logging.DEBUG, f"Input: {payload}")
-        logger.log(logging.DEBUG, f"Response: {response}")
-
-        result: Dict[str, list[list[str]]] = {}
-        parsed = response if isinstance(response, dict) else {}
         if not isinstance(response, dict):
-            logger.warning("disambiguate_duplicate_labels: LLM returned unparseable response")
+            logger.warning("resolve_hierarchy_relation: LLM returned unparseable response")
+            return {"relation": "none"}
 
-        for group in groups:
-            label = group["label"]
-            all_ids = [c["id"] for c in group["candidates"]]
-            raw_clusters = parsed.get(label)
+        if response.get("relation") not in ("parent", "child", "same_concept", "same_class", "none"):
+            logger.warning(
+                "resolve_hierarchy_relation: LLM returned unknown relation %r; treating as none",
+                response.get("relation"),
+            )
+            return {"relation": "none"}
 
-            if not isinstance(raw_clusters, list):
-                result[label] = [[tid] for tid in all_ids]
-                continue
+        if response.get("relation") == "child":
+            raw_candidates = response.get("candidates")
+            if raw_candidates is None:
+                single = response.get("candidate")
+                raw_candidates = [single] if single else []
+            elif not isinstance(raw_candidates, list):
+                raw_candidates = [raw_candidates]
+            response = dict(response)
+            response["candidates"] = [str(c) for c in raw_candidates if c]
 
-            seen: set = set()
-            clusters: list[list[str]] = []
-            for raw_cluster in raw_clusters:
-                if not isinstance(raw_cluster, list):
-                    continue
-                cluster = [tid for tid in raw_cluster if tid in all_ids and tid not in seen]
-                if not cluster:
-                    continue
-                seen.update(cluster)
-                clusters.append(cluster)
-
-            # Any candidate id the response silently dropped stays its own
-            # (unmerged) cluster rather than being lost.
-            for tid in all_ids:
-                if tid not in seen:
-                    clusters.append([tid])
-
-            result[label] = clusters
-
-        return result
+        return response
 
     def classify_relation_direction(
         self, canonical_label: str, surface_forms: list[str],
@@ -421,6 +394,24 @@ class LLMTripletExtractor:
     def calculate_used_tokens(self) -> int:
         """Calculate the total # of used tokens for generation"""
         return self.prompt_tokens_num, self.completion_tokens_num
+
+    def get_usage_snapshot(self) -> Dict[str, float]:
+        """Atomic (single-lock) read of the three running counters, for
+        callers that need a consistent point-in-time snapshot -- e.g.
+        pipeline.py diffing before/after a step to get that step's own
+        token usage, where reading the three attributes one at a time could
+        otherwise race against a concurrent get_completion() call landing
+        mid-read (see the lock added in get_completion() itself)."""
+        with self._token_lock:
+            prompt_tokens = self.prompt_tokens_num
+            completion_tokens = self.completion_tokens_num
+            cost = self.current_cost
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+            "cost_usd": cost / 1e6,
+        }
 
     def reset_tokens(self):
         """Reset the total # of used tokens for generation"""

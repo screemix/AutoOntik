@@ -11,7 +11,7 @@ from src.ontodisco.utils.dedup_base import (
     ContrieverEmbedder,
     DeduplicationResult,
     cluster_hdbscan,
-    deduplicate,
+    deduplicate_with_rounds,
     normalize_label,
 )
 
@@ -104,6 +104,9 @@ def deduplicate_relations(
     similarity_threshold: float = 0.85,
     embed_batch_size: int = 64,
     device: str = None,
+    max_merge_rounds: int = 5,
+    max_parallel_workers: int = 8,
+    max_cluster_size: int = 40,
 ) -> RelationDeduplicationResult:
     """
     Full entity name deduplication with type-aware compound labels.
@@ -124,6 +127,17 @@ def deduplicate_relations(
         similarity_threshold: Cosine similarity threshold for merging (default 0.85).
         embed_batch_size:     Batch size for Contriever encoding.
         device:               "cuda", "cpu", or None (auto).
+        max_merge_rounds:     Max embed -> cluster -> LLM-verify passes
+                              (dedup_base.deduplicate_with_rounds) before
+                              stopping, once a round produces no further
+                              reduction in the canonical relation count.
+                              1 behaves identically to a plain single-pass
+                              deduplicate() call.
+        max_parallel_workers: Thread pool size for concurrent LLM cluster
+                              verification calls within each round.
+        max_cluster_size:     Size cap before a cluster is split into
+                              sub-batches + stitched back together (see
+                              dedup_base.verify_clusters_with_llm).
 
     Returns:
         RelationDeduplicationResult with canonical entities and mappings.
@@ -147,10 +161,20 @@ def deduplicate_relations(
 
     embedder = ContrieverEmbedder(model_name=contriever_model, device=device)
 
-    def _build_relation(item_id, canonical_label, surface_forms, count_per_normalized, 
+    def _build_relation(item_id, canonical_label, surface_forms, count_per_normalized,
                       surface_form_counts):
-        subject_types = relation_2_subject_types[canonical_label]
-        object_types = relation_2_object_types[canonical_label]
+        # Union over every raw surface form actually folded into this
+        # canonical relation, not a lookup keyed by canonical_label: the
+        # LLM-chosen canonical_label is frequently not identical to any raw
+        # relation string (more so once merge rounds compound further, see
+        # deduplicate_with_rounds), so a canonical_label-keyed lookup into
+        # relation_2_subject_types/object_types (keyed by raw strings) would
+        # silently come back empty for exactly the relations that merged.
+        subject_types: set[str] = set()
+        object_types: set[str] = set()
+        for sf in surface_forms:
+            subject_types |= relation_2_subject_types.get(sf, set())
+            object_types |= relation_2_object_types.get(sf, set())
         return CanonicalRelation(
             item_id=item_id,
             canonical_label=canonical_label,
@@ -164,7 +188,7 @@ def deduplicate_relations(
     def _cluster_fn(embeddings: np.ndarray) -> np.ndarray:
         return cluster_hdbscan(embeddings, threshold=similarity_threshold)
 
-    base_result = deduplicate(
+    base_result = deduplicate_with_rounds(
         all_labels=all_relation_surface_forms,
         llm_verifier=llm_extractor,
         surface_form_type='relation',
@@ -175,6 +199,9 @@ def deduplicate_relations(
         id_prefix="rel",
         id_width=5,
         build_item=_build_relation,
+        max_rounds=max_merge_rounds,
+        max_workers=max_parallel_workers,
+        max_cluster_size=max_cluster_size,
     )
 
     logger.info(
