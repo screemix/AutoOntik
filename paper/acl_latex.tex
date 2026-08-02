@@ -145,7 +145,7 @@ These instructions should be used both for papers submitted for review and for f
 \section{Introduction}
 \label{sec:introduction}
 
-Retrieval-augmented generation (RAG) grounds large language model (LLM) outputs in evidence retrieved at inference time \citep{lewis2020rag}, but retrieval over unstructured, chunked text struggles with multi-hop questions whose evidence is scattered across many documents. Graph-based RAG addresses this by retrieving over a knowledge graph (KG) instead of flat passages to support multi-hop reasoning and
+Retrieval-augmented generation (RAG) grounds large language model (LLM) outputs in evidence retrieved at inference time \citep{lewis2020rag}, but retrieval over unstructured, chunked text struggles with multi-hop questions whose evidence is scattered across many chunks or documents. Graph-based RAG addresses this by retrieving over a knowledge graph (KG) instead of flat passages to support multi-hop reasoning and
 query-time generalization over specific mentions \citep{edge2024graphrag}.
 The quality of graph-based retrieval is therefore bounded by the quality of the KG that backs it: a graph with redundant, untyped nodes and unconstrained edges offers little more structure than the text it was extracted from \citep{chepurova2026wikontic}.
 
@@ -166,18 +166,18 @@ corpus's vocabulary.
 Recent work instead automates (i) directly from text with LLMs. KGGen \citep{mo2025kggen} extracts open-vocabulary triples and merges near-duplicate entity and relation surface forms through embedding-based clustering and LLM-adjudicated verification, producing a substantially cleaner graph than raw extraction alone. However, canonicalization in KGGen and other schema-free extraction pipeline is flat, so the resulting graph has no type hierarchy and no domain/range constraints. Without types, clustering has no symbolic signal to fall back on and must rely on embedding similarity and LLM judgment alone. This raises a concrete risk: distinct entities or relations that are surface-similar but semantically different (e.g., a film and a biography of its director) are more likely to be over-merged. A type hierarchy also gives downstream retrieval a coarser fallback unit when an exact entity or relation match is missed.
 
 Extending flat canonicalization into a typed, hierarchical ontology introduces three problems that flat deduplication never has to face.
-First, type labels are themselves open-vocabulary free text, so they need the same clustering-plus-LLM-verification treatment as entities and relations. But naively merging similar type labels tends to conflate a general category with its own specializations, for example \emph{film} and \emph{documentary film}. A documentary film participates in nearly every relation that a film does, so the two look embedding-similar even though one is strictly more specific than the other.
+First, type labels are themselves open-vocabulary free text, so they need the same clustering-plus-LLM-verification treatment as entities and relations. But naively merging similar type labels tends to conflate a general category with its own specializations, for example \emph{film} and \emph{documentary film}: the two look embedding-similar even though one is strictly more specific than the other.
 
-Second, inducing a hierarchy over the resulting canonical types is a separate problem from canonicalizing them. If placement happens in a single pass, or bottom-up, a type can get permanently attached under too general a parent. This happens whenever a more specific sibling type is only discovered later, since nothing revisits the earlier placement to correct it.Third, relation canonicalization merges surface forms without regard to grammatical role. A canonical relation can therefore silently pool a predicate together with its grammatical inverse (e.g.\ \emph{directed} and \emph{was directed by}). This fragments the domain/range evidence that constraint induction relies on, instead of reinforcing it.
+Second, inducing a hierarchy over the resulting canonical types is a separate problem from canonicalizing them. If placement happens in a single pass, or bottom-up, a type can get permanently attached under too general a parent. This happens whenever a more specific sibling type is only discovered later, since nothing revisits the earlier placement to correct it. Third, relation canonicalization merges surface forms without regard to grammatical role. A canonical relation can therefore silently pool a predicate together with its grammatical inverse (e.g.\ \emph{directed} and \emph{was directed by}). This fragments the domain/range evidence that constraint induction relies on, instead of reinforcing it.
 
-We present \textbf{OntoDisco}, a pipeline that extends KGGen's schema-free extract-then-canonicalize approach to close this gap: on top of a
+We present \textbf{OntoDisco}, a pipeline that extends schema-free approaches to close this gap: on top of a
 deduplicated entity and relation vocabulary, it produces a
 hyponymy-aware, hierarchically organized type vocabulary, an entity
 vocabulary deduplicated against that hierarchy, and a set of
-per-relation domain/range constraints mined from it
+per-relation domain/range constraints mined from it.
 (\S\ref{sec:methods}). Our contributions are:
 \begin{itemize}
-  \item OntoDisco, a schema-free typed extraction and
+  \item OntoDisco, extraction and
   canonicalization pipeline that induces a type hierarchy and
   domain/range constraints from raw text with no predefined schema
   (\S\ref{sec:methods}).
@@ -189,7 +189,7 @@ per-relation domain/range constraints mined from it
 % \subsection{Overview}
 % \label{sec:methods-overview}
 
-OntoDisco turns a corpus of open-vocabulary into a canonicalized, typed knowledge graph: a deduplicated relation vocabulary, a deduplicated and hierarchically organized entity-type vocabulary, a deduplicated entity vocabulary with class assignments, and a set of relation-level domain/range constraints (Figure~\ref{fig:pipeline}).
+OntoDisco turns a textual corpus into a canonicalized, typed knowledge graph: a deduplicated relation vocabulary, a deduplicated and hierarchically organized entity-type vocabulary, a deduplicated entity vocabulary with class assignments, and a set of relation-level domain/range constraints (Figure~\ref{fig:pipeline}).
 At first, a schema-free LLM extractor  (\S\ref{sec:extraction}) produces a collection of raw triplets: 
 \begin{equation}
 \mathcal{G} = (s, t_s, r, o, t_o, Q),
@@ -204,7 +204,7 @@ induces a taxonomy hierarchy over the resulting type vocabulary,
 domain/range constraint induction}. The ordering is dictated by data
 dependencies. Entity-type canonicalization is conditioned on the canonical relation vocabulary as a disambiguating signal. Entity deduplication runs after the type hierarchy because it uses the hierarchy as a symbolic gate for candidate synonyms. Constraint induction derives relation constraints directly from the extracted triplets and the outputs of the first two stages.
 
-The following design choices recur across stages. (1) Deduplication of synonimous surface forms is performed by clustering with Contriever sentence embeddings \citep{izacard2022contriever} and HDBSCAN
+The following design choices reoccur across stages. (1) Deduplication of synonimous surface forms is performed by clustering with Contriever sentence embeddings \citep{izacard2022contriever} and HDBSCAN
 \citep{campello2013hdbscan} clustering. Next, every merge/split decision for deduplication is adjudicated by a single LLM call per candidate group.(2) Result of each stage is checkpointed once it completes, allowing of independent inspection of stages' results and re-using it in follow-up experiments.
 
 \subsection{Initial Typed Triplet Extraction}
@@ -218,13 +218,13 @@ constrained to any predefined schema. This schema-free design allows the canonic
 Relation canonicalization maps the raw, free-text \texttt{relation} strings observed across all triplets onto a canonical relation vocabulary
 $\mathcal{R}^*$. Candidate clusters are generated by embedding every raw
 relation surface form and clustering with HDBSCAN as described
-before. Every multi-member candidate cluster is then passed to a single LLM call that decides whether to merge all members into one relation or split them into several (Listing~\ref{lst:cluster-relations}).
+before. Every multi-member candidate cluster is then passed to a single LLM call that decides whether to merge all members into one relation or split them into several (see the prompt in Listing~\ref{lst:cluster-relations}).
 
 \subsection{Entity Types Deduplication}
 \label{sec:type-dedup}
 
 This stage both flattens the raw type vocabulary into a canonical set
-$\mathcal{T}^*$ and organizes $\mathcal{T}^*$ into a taxonomy hierarchy.
+$\mathcal{T}^*$ and organizes $\mathcal{T}^*$ into a taxonomy hierarchy $\mathcal{H}^*$.
 
 \subsubsection{Type canonicalization}
 
@@ -232,7 +232,7 @@ Candidate clusters over raw type labels are generated the same way as for
 relations (\S\ref{sec:relation-dedup}), but with two additional sources of evidence. First, before LLM verification, any two candidate clusters whose relation-argument profiles (TF-IDF-weighted over which canonical relations each type's mentions occur as an argument of) are sufficiently cosine-similar are further merged. Second, each candidate label shown to the LLM verifier is annotated with a the relations it most often co-occurs with, giving the verifier concrete distributional evidence beyond the bare label string.
 
 The verification prompt additionally enforces a hyponymy (``kind of'') test: two labels are merged only if neither is a hyponym of the other, even when their relation-argument profiles overlap almost entirely. For example, \ \emph{documentary film} and \emph{film} participate in the same relations, but LLM instructed to keep them distinct, whereas \emph{movie} and \emph{film}, true synonyms, should
-be merged. The full prompt, including this hyponymy test, is given in Listing~\ref{lst:cluster-entity-types}.
+be merged. The full prompt is given in Listing~\ref{lst:cluster-entity-types}.
 
 \subsubsection{Hierarchy induction}
 \label{sec:hierarchy-induction}
@@ -457,26 +457,30 @@ domain, so a \textsc{Combined} run's per-domain breakdown is directly
 comparable to the corresponding \textsc{Separate} run for that same
 domain.
 
-% \subsection{Judging Reliability}
-% \label{sec:eval-reliability}
+\subsection{Judging Reliability}
+\label{sec:eval-reliability}
 
-% A judge call that raises an exception (rate limiting, transient network
-% failure) is never folded into a \emph{no match} or \textsc{Not Related}
-% judgment; such calls are excluded from recall's denominator and reported
-% as a separate failure count, with an explicit warning when failures make
-% up a large fraction of a run.
+A judge call that raises an exception (rate limiting, transient network
+failure) is never folded into a \emph{no match} or \textsc{Not Related}
+judgment; such calls are excluded from recall's denominator and reported
+as a separate failure count, with an explicit warning when failures make
+up a large fraction of a run.
 
-\subsection{Downstream QA Evaluation}
+\subsection{Downstream QA Evaluation on MuSiQue}
 \label{sec:eval-qa}
 
-Text2KGBench evaluation: it scores extracted triples and induced types directly against a gold ontology, independent of any downstream use. It does not test the claim motivating OntoDisco in the first place
+The Text2KGBench evaluation above (\S\ref{sec:evaluation})
+is \emph{intrinsic}: it scores extracted triples and induced types directly against a gold ontology, independent of any downstream use. It does not test the claim motivating OntoDisco in the first place
 (\S\ref{sec:introduction}): that a typed, hierarchically organized KG
 supports graph-based retrieval better than a flat one. We complement it
 with an \emph{extrinsic} evaluation on multi-hop question answering, where
 the KG is used, not just scored.
 
 \paragraph{Benchmark.} We use 200 instances (2--4 hop questions) from the
-MuSiQue test set \citep{trivedi2022musique} used in prior works\citep{chepurova2026wikontic}. Each MuSiQue instance bundles a
+MuSiQue test set \citep{trivedi2022musique}, the same instances the raw
+triplet corpus fed into the pipeline was extracted from, so this
+evaluation reuses the pipeline's own KG rather than one built for a
+different corpus. Each MuSiQue instance bundles a
 question, a gold answer with optional answer aliases, and the $\sim$20
 supporting and distractor paragraphs the question's evidence is drawn
 from.
@@ -500,7 +504,18 @@ own instance, before the walk ever begins.
 
 \paragraph{Metrics.} We report exact match and token-level F1 between the
 predicted answer and the gold answer, following the standard
-MuSiQue convention.
+SQuAD/MuSiQue convention of maximizing each metric over the gold answer
+and its provided aliases, since a prediction need only match one
+acceptable reference string.
+
+\paragraph{Purpose.} Because the QA-answering LLM is fixed and
+independent of whichever backbone built the KG being evaluated (the same
+judge-independence design used for Text2KGBench evaluation above), a
+change in exact-match/F1 across KGs built with different extraction
+backbones or different hierarchy-induction settings (backbone,
+\texttt{max\_depth}, seed roots) isolates the effect of KG structure
+itself on downstream QA, rather than conflating it with a stronger or
+weaker answering model.
 
 % TODO: report exact-match/F1 once the full sweep across
 % output/checkpoints/run_* (varying backbone, max_depth, and seed roots)
