@@ -6,8 +6,6 @@ You are an algorithm designed to extract structured knowledge from texts to buil
 
 Additionally, some triplets may have **qualifiers** that provide more context (e.g., date, place, or other attributes). Qualifiers should have relations and object like triplets do, but instead of subject their relation connects an object and the triplet qualifier belongs to. **Qualifiers must always be attached to a triplet** and never exist as standalone triplets.
 
-Keep the main triplet's **relation** general: fold any detail that could vary (measure, place, method, time, etc.) into a role-labeled qualifier rather than the relation text — and when several entities participate, keep only the most central as object, qualifier the rest.
-
 You will receive a text labeled **"Text:"**. Your task is to extract meaningful triplets that represent factual relationships.
 
 ### Output Format
