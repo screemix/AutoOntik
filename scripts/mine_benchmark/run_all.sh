@@ -26,6 +26,9 @@
 #                       kg_graph_qualifiers.json instead of kg_graph.json, so
 #                       a plain rerun without this flag never clobbers it --
 #                       you can build and evaluate both variants side by side.
+#   --config PATH      Pipeline config for extraction + KG construction
+#                       (default: configs/gpt_oss.yaml). Passed through to
+#                       extract_triplets.py and run_pipeline_mine.py.
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -49,6 +52,7 @@ while [[ $# -gt 0 ]]; do
     --judge-model) JUDGE_MODEL="$2"; shift 2 ;;
     --judge-api-key-env) JUDGE_API_KEY_ENV="$2"; shift 2 ;;
     --use-qualifiers) USE_QUALIFIERS="--use-qualifiers"; GRAPH_FILENAME="kg_graph_qualifiers.json"; shift ;;
+    --config) CONFIG="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done

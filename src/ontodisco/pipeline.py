@@ -111,6 +111,9 @@ class LLMConfig:
     model: str = "gpt-4o-mini"
     api_key_env: str = "OPENAI_API_KEY"      # env var to read the key from -- never put keys in YAML
     base_url: str = "https://api.openai.com/v1"
+    proxy_key_env: Optional[str] = None      # optional: env var holding an HTTP(S) proxy URL, routed
+                                              # through httpx.Client(proxy=...) same as run_judge_eval.py's
+                                              # judge client; None (default) means no proxy -- direct connection
 
 
 @dataclass
@@ -316,8 +319,14 @@ def run_pipeline(config: PipelineConfig, *, resume: bool = False) -> OntoDiscoRe
         raise RuntimeError(
             f"Environment variable {config.llm.api_key_env!r} (config.llm.api_key_env) is not set"
         )
+    proxy = os.environ.get(config.llm.proxy_key_env) if config.llm.proxy_key_env else None
+    if config.llm.proxy_key_env and not proxy:
+        logger.warning(
+            "config.llm.proxy_key_env=%r is set but that environment variable is empty -- "
+            "proceeding without a proxy", config.llm.proxy_key_env,
+        )
     llm_extractor = LLMTripletExtractor(
-        api_key=api_key, model=config.llm.model, base_url=config.llm.base_url,
+        api_key=api_key, model=config.llm.model, base_url=config.llm.base_url, proxy=proxy,
     )
 
     triplets = load_triplets(config.input_path)

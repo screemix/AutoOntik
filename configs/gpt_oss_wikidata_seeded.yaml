@@ -1,9 +1,20 @@
-# configs/default.yaml
+# configs/gpt_oss_dolce_seeded.yaml
 #
-# Config for src/ontodisco/pipeline.py -- covers all five orchestrated steps:
-# Relation Canonicalization, Type Canonicalization, Hierarchy Induction,
-# Entity Deduplication, Constraint Induction. Extraction / Serialization are
-# not implemented yet and have no config section here.
+# Same as configs/gpt_oss.yaml, but hierarchy induction is seeded with the
+# full DOLCE basic-category tree (CLAUDE.md §15.4) instead of running
+# unseeded. The four basic categories (Endurant, Perdurant, Quality,
+# Abstract) are pinned as roots; everything below them is nested seed
+# children, connected to their seed parent by a trusted, non-LLM
+# HierarchyEdge (see hierarchy_induction.py's HierarchyEdge.is_seed) rather
+# than an LLM call -- only where a real T* type attaches under one of these
+# categories does the usual LLM-adjudicated placement happen.
+#
+# Each seed label is matched against T* by normalized label if a corpus
+# type with that name already exists, or synthesized fresh (with no
+# relation-signature profile) otherwise -- most of DOLCE's finer categories
+# (e.g. "Amount of Matter", "Non-Agentive Social Object") are expected to be
+# synthesized, since they're unlikely to appear verbatim as raw extracted
+# types in most corpora; they still function as valid attachment points.
 
 corpus_id: "my_corpus"
 input_path: "./data/musique_initial_triplets.jsonl"   # JSONL file, one raw triplet dict per line
@@ -11,12 +22,9 @@ output_dir: "./output"
 
 # ── LLM client ────────────────────────────────────────────────────────────────
 llm:
-  model: "Sber/GigaChat3.5-432B-A28B"
+  model: "Openai/Gpt-oss-120b"
   api_key_env: "AIRI_KEY"       # name of the env var holding the key -- never put the key itself here
   base_url: "https://inference.airi.net:46783/v1"
-  proxy_key_env: null            # optional: name of the env var holding an HTTP(S) proxy URL, used for
-                                  # every LLM call this pipeline makes (extraction + all 5 steps); null
-                                  # (default) means no proxy -- a direct connection to base_url
 
 # ── Embedding client ──────────────────────────────────────────────────────────
 embedding:
@@ -25,14 +33,9 @@ embedding:
   embed_batch_size: 64
 
 # ── Relation Canonicalization ─────────────────────────────────────────────────
-# Candidate clustering is HDBSCAN (dedup_base.cluster_hdbscan) over the full
-# pairwise cosine-distance matrix -- similarity_threshold sets HDBSCAN's
-# cluster_selection_epsilon. max_merge_rounds: embed->cluster->LLM-verify
-# passes (dedup_base.deduplicate_with_rounds), stopping early once a round
-# produces no further reduction in the canonical relation count.
 relation_canonicalization:
   similarity_threshold: 0.75
-  max_merge_rounds: 20
+  max_merge_rounds: 5
   max_parallel_workers: 8      # thread pool size for concurrent LLM cluster verification
   max_cluster_size: 40         # clusters over this size are split into sub-batches + stitched back
                                 # together, instead of one oversized (slow, truncation-prone) LLM call
@@ -41,7 +44,7 @@ relation_canonicalization:
 type_canonicalization:
   hac_threshold: 0.75          # HDBSCAN cluster_selection_epsilon = 1 - this (name kept for compatibility)
   relation_context_top_k: 5
-  max_merge_rounds: 20          # same convergence loop as relation_canonicalization above
+  max_merge_rounds: 5          # same convergence loop as relation_canonicalization above
   max_parallel_workers: 8
   max_cluster_size: 40
 
@@ -50,10 +53,18 @@ hierarchy:
   relation_signature_weighting: "ppmi"
   weeds_containment_threshold: 0.75
   priority_band_tolerance: 10  # nodes within this many in-degree units of a band's top score share it
-  seed_roots: []              # e.g. ["Endurant", "Perdurant", "Quality", "Abstract"] for a DOLCE-seeded run
+
+  # DOLCE seed hierarchy (CLAUDE.md §15.4 / §16.2.1), loaded from a separate
+  # reusable seed-ontology file rather than embedded inline -- see
+  # configs/seeds/dolce.yaml and pipeline.load_seed_roots(). Resolved by
+  # run_pipeline() at run time; leave `seed_roots:` above unset/empty when
+  # `seed_roots_path` is given (an inline value here would be ignored, with
+  # a warning logged, in favor of the file).
+  seed_roots_path: "./configs/seeds/wikidata.yaml"
+
   candidate_batch_size: 30
   max_escalation_batches: 3
-  max_depth: null                # null (YAML) / None (Python) means uncapped -- see hierarchy_induction.HierarchyConfig
+  max_depth: 10                # null (YAML) / None (Python) means uncapped -- see hierarchy_induction.HierarchyConfig
   embed_batch_size: 64
   context_top_k: 5
   max_parallel_workers: 8      # thread pool size for band 2+ (band 1 always runs sequentially)

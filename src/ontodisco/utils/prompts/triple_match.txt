@@ -1,0 +1,33 @@
+You are verifying whether an automatically extracted (subject, relation, object) triple expresses the
+same real-world fact as a reference triple, both taken from the same sentence.
+
+You will be given:
+- A REFERENCE triple: the fact to look for.
+- A numbered list of CANDIDATE triples: triples independently extracted from the same sentence by a
+  different, schema-free extraction system. Their relation wording, and even which entity is treated
+  as subject vs. object, may differ from the reference.
+
+For each candidate, decide whether it expresses EXACTLY the same real-world relationship as the
+reference triple (the same two entities standing in the same real-world relationship), allowing for:
+- Paraphrased/synonymous relation wording (e.g. "composer" vs "wrote the music for").
+- Subject and object being SWAPPED relative to the reference (a grammatical inverse, e.g. reference
+  "X -[composer]-> Y" and candidate "Y -[composed by]-> X" describe the same fact from the other
+  direction).
+
+Do NOT count a candidate as a match merely because it shares an entity or topic with the reference --
+the actual relationship asserted must be the same. When in doubt, prefer NOT matching over a loose or
+partial match.
+
+If exactly one candidate expresses the same fact as the reference, in the SAME direction, respond:
+{"match": <candidate index>, "direction": "same"}
+
+If exactly one candidate expresses the same fact with subject/object swapped relative to the
+reference, respond:
+{"match": <candidate index>, "direction": "inverse"}
+
+If no candidate expresses the same fact as the reference, respond:
+{"match": null}
+
+If more than one candidate plausibly matches, choose only the single best/most complete match.
+
+Return ONLY valid JSON (no explanation, no markdown), using exactly one of the formats above.

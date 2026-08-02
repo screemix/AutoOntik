@@ -173,52 +173,57 @@ carries no type hierarchy and no domain/range constraints, precisely the
 structure (ii) and (iii) above that graph-based retrieval depends on.
 
 Extending flat canonicalization into a typed, hierarchical ontology
-surfaces problems flat deduplication does not have to solve. Type labels
-are themselves open-vocabulary free text and need the same
-clustering-plus-LLM-verification treatment as entities and relations, but
-naively merging similar type labels systematically conflates general
-categories with their own specializations (e.g.\ \emph{film} and
-\emph{documentary film}), since a specialization participates in nearly
-every relation its parent does and is therefore embedding-similar to it by
-construction. Inducing a hierarchy over the resulting canonical types is a
-distinct problem again: a single-pass or bottom-up placement can
-permanently misattach a type under too shallow a parent whenever a more
-specific sibling type happens to be discovered later, with no mechanism to
-correct the placement afterward. And because relation canonicalization
-merges surface forms without regard to grammatical role, a canonical
-relation can silently pool a predicate together with its grammatical
-inverse, which fragments -- rather than reinforces -- the very
-domain/range evidence constraint induction relies on.
+requires more than applying the same clustering-plus-LLM-verification
+procedure to type labels: the procedure itself targets the wrong
+relation.
+
+Flat canonicalization operationalizes deduplication as synonymy
+detection -- two surface forms are merged when they are judged to denote
+the same entity -- and embedding similarity is a reliable proxy for that
+judgment, since synonyms tend to occur in similar contexts. A hierarchy
+instead requires distinguishing synonymy from hyponymy, identity from
+specificity, and embedding similarity does not make this distinction. A
+hyponym such as \emph{documentary film} occurs in nearly every context its
+hypernym \emph{film} does, so the pair is as embedding-similar as a
+genuine synonym pair such as \emph{movie}/\emph{film}. A verification
+procedure tuned to detect synonymy merges hyponym pairs as readily as
+synonym pairs, collapsing exactly the distinction a hierarchy is meant to
+preserve.
+
+A second, independent problem concerns how canonical types are organized
+once they are correctly kept distinct. Deduplication decisions are
+pairwise and commute: whether two labels merge is independent of which
+other merges have already occurred, or in what order they are evaluated.
+Placement in a hierarchy does not commute in this way: whether a type is a
+child, a parent, or a sibling of another depends on which types have
+already been placed, so the order in which types are processed affects
+the resulting structure. A procedure limited to pairwise, order-independent
+merge decisions cannot, by construction, produce a hierarchy; this is one
+reason flat pipelines such as KGGen do not attempt to induce one.
+
+A third problem arises on the relation side. Flat relation
+canonicalization clusters predicate surface forms by semantic similarity
+without tracking which cluster member filled the subject role and which
+filled the object role. As a result, a canonical relation can silently
+merge a predicate with its own grammatical inverse (e.g.\ \emph{directed}
+and \emph{was directed by}), conflating subject and object across the
+merged surface forms. Domain and range constraints are defined precisely
+over this role assignment, so an undetected inverse merge corrupts the
+evidence any constraint estimate would be computed from.
 
 We present \textbf{OntoDisco}, a pipeline that extends KGGen's schema-free
-extract-then-canonicalize approach with the machinery needed to close this
-gap. Our contributions are:
+extract-then-canonicalize approach to close this gap: on top of a
+deduplicated entity and relation vocabulary, it produces a
+hyponymy-aware, hierarchically organized type vocabulary, an entity
+vocabulary deduplicated against that hierarchy, and a set of
+per-relation domain/range constraints mined from it
+(\S\ref{sec:methods}). Our contributions are:
 \begin{itemize}
-  \item A schema-free typed extraction and canonicalization pipeline that,
-  in addition to a deduplicated entity and relation vocabulary, produces a
-  canonical, hierarchically organized entity-type vocabulary and a set of
-  per-relation domain/range constraints (\S\ref{sec:methods}).
-  \item A hyponymy-aware type canonicalization step that combines
-  relation-argument distributional evidence with an explicit
-  \emph{kind-of} test in the verification prompt, so that specializations
-  are not merged into their own parent category (\S\ref{sec:type-dedup}).
-  \item A priority-ordered, top-down hierarchy induction procedure that
-  places types from most to least general, by a Weeds-precision
-  containment signal \citep{weeds2004characterising}, and that -- unlike a
-  single-pass placement -- can retroactively insert a newly placed type
-  \emph{above} an already-placed one, correcting an earlier too-shallow
-  attachment rather than only ever preventing it going forward
-  (\S\ref{sec:hierarchy-induction}).
-  \item An entity deduplication step that resolves entity identity as the
-  pair (name, canonical type) rather than name alone, and restricts
-  embedding-based candidate comparison to a symbolic gate -- identical
-  type or shared immediate parent in the induced hierarchy -- before
-  clustering (\S\ref{sec:entity-dedup}).
-  \item A relation-direction resolution step that detects and corrects
-  merged grammatical inverses before mining domain/range constraints, and
-  a hierarchy-generalized, PCA-style confidence score
-  \citep{galarraga2013amie} for the resulting constraints
-  (\S\ref{sec:constraints}).
+  \item OntoDisco itself, a schema-free typed extraction and
+  canonicalization pipeline that induces a type hierarchy and
+  domain/range constraints from raw text with no predefined schema
+  (\S\ref{sec:methods}).
+  % \item Evaluation-based contributions -- add once experiments are run.
 \end{itemize}
 
 \section{Methods: OntoDisco}
@@ -407,8 +412,244 @@ This confidence is thresholded into \textsc{Hard}, \textsc{Soft}, and
 % \section{KG Retrieval and QA}
 % TODO -- not yet written.
 
-% \section{Evaluation}
-% TODO -- not yet written.
+\section{Evaluation}
+\label{sec:evaluation}
+
+We evaluate OntoDisco on \textbf{Text2KGBench}
+\citep{mihindukulasooriya2023text2kgbench}, a benchmark of sentence--triple
+pairs annotated against small, hand-curated domain ontologies, comprising
+two subsets: \textbf{Wikidata-TekGen} (10 domain ontologies) and
+\textbf{DBpedia-WebNLG} (19 domain ontologies). Each domain ontology
+defines a set of classes and object properties, every property carrying a
+declared domain and range class; several Wikidata-TekGen ontologies
+additionally encode a class hierarchy via \texttt{rdfs:subClassOf}, whereas
+the DBpedia-WebNLG ontologies we inspected did not. Every test sentence is
+paired with a gold triple set $\{(s, r, o)\}$ drawn from the ontology's
+relation vocabulary; gold triples carry no per-triple type annotation, so a
+relation's declared domain/range class stands in for the type of every
+argument observed in that role. We use the \texttt{test}/\texttt{ground\_truth}
+split exclusively -- 4{,}062 sentences across the 10 Wikidata-TekGen
+ontologies and 2{,}014 across the 19 DBpedia-WebNLG ontologies -- and not
+the benchmark's \texttt{train} split, which supports few-shot and
+fine-tuned baselines and is out of scope for a zero-shot, schema-free
+pipeline.
+
+Text2KGBench's intended task is \emph{ontology-guided} generation: a
+system is given the ontology and must emit compliant triples. We invert
+this: OntoDisco is schema-free and receives no ontology as input; the
+benchmark's gold ontology and gold triples serve only as a post-hoc
+reference against which the pipeline's own induced schema and extracted
+triples are scored.
+
+\subsection{Experimental Design}
+\label{sec:eval-design}
+
+For each of two LLM backbones driving both extraction (\S\ref{sec:extraction})
+and every subsequent stage -- Qwen3-Next-80B-A3B-Instruct
+\citep{qwen2025qwen3} and gpt-oss-120b \citep{openai2025gptoss} -- we run
+two conditions per benchmark subset:
+
+\begin{description}
+  \item[\textsc{Separate}] one pipeline run per ontology domain, yielding
+  an independent $\mathcal{R}^*$, $\mathcal{T}^*$, and hierarchy for that
+  domain alone.
+  \item[\textsc{Combined}] one pipeline run over the pooled sentences of
+  every domain in the subset, yielding a single $\mathcal{R}^*$,
+  $\mathcal{T}^*$, and hierarchy shared across all of them.
+\end{description}
+
+The \textsc{Combined} condition tests whether schema-free discovery
+separates unrelated domains into distinct regions of one induced hierarchy
+on its own, rather than only ever being evaluated one domain at a time.
+Judging (\S\ref{sec:eval-matching}--\S\ref{sec:eval-types}) is performed in
+every condition by a fixed third-party model, GPT-4o
+\citep{openai2024gpt4o}, independent of whichever backbone built the KG,
+so that comparisons between backbones are not confounded by a model
+grading its own extractions.
+
+\subsection{Triple-Level Matching}
+\label{sec:eval-matching}
+
+Because canonicalization operates over the whole corpus, matching is
+performed per sentence rather than per raw triplet, using sentence-level
+provenance carried alongside -- not inside -- $\mathcal{G}$. For every gold
+triple, we retrieve the extracted triples OntoDisco produced from the same
+sentence and ask an LLM judge to select, if any, the one that expresses
+the same real-world fact as the gold triple, allowing for paraphrased
+relation wording and for subject and object being swapped (a grammatical
+inverse of the gold triple, e.g.\ \emph{X composed Y} vs.\ \emph{Y was
+composed by X}). The judge returns a matched index with direction
+\emph{same}, a matched index with direction \emph{inverse}, or no match. A
+matched extracted triple is removed from that sentence's candidate pool
+before the next gold triple is judged, so no single extraction can satisfy
+two gold triples.
+
+Gold triples are matched in this direction -- from the reference side
+outward -- specifically so that an \emph{unmatched extracted triple} is
+never scored as a false positive: Text2KGBench's ontologies cover a
+curated relation vocabulary of roughly 15--20 relations per domain, and a
+schema-free pipeline may correctly extract true facts the gold ontology
+simply does not encode. Such leftover extractions are reported as an
+\emph{extra rate}, separate from recall.
+
+\subsection{Domain/Range Type Matching}
+\label{sec:eval-types}
+
+For every matched pair, we compare the type OntoDisco assigned to the
+extracted triple's subject and object against the gold relation's
+declared domain and range class (swapped when the match direction is
+\emph{inverse}). A second LLM judge classifies each side as \textsc{Exact}
+(synonymous types), \textsc{More General} (OntoDisco's type is a broader
+category subsuming the gold type), \textsc{More Narrow} (OntoDisco's type
+is a subtype of the gold type), or \textsc{Not Related}. We report this
+four-way judgment as a distribution rather than collapsing it to a single
+accuracy figure: \textsc{More General} and \textsc{More Narrow} are
+distinct failure modes of hierarchy induction -- over-flattening versus
+over-fragmentation -- worth distinguishing rather than conflating into one
+error rate.
+
+\subsection{Metrics}
+\label{sec:eval-metrics}
+
+\paragraph{Recall} is the proportion of gold triples matched, excluding
+any triple whose judge call failed outright (\S\ref{sec:eval-reliability}).
+
+\paragraph{Direction breakdown} reports the proportion of matches
+classified \emph{same} versus \emph{inverse}, doubling as an indirect
+check on the pipeline's own relation-direction resolution
+(\S\ref{sec:constraints}, Stage~1).
+
+\paragraph{Extra rate} is the proportion of extracted triples per sentence
+left unmatched after every gold triple has been processed
+(\S\ref{sec:eval-matching}), reported separately from recall.
+
+\paragraph{Type-judgment distribution} reports, over matched pairs only,
+the counts of \textsc{Exact}/\textsc{More General}/\textsc{More
+Narrow}/\textsc{Not Related} for the domain and range sides independently.
+
+Every metric is reported both pooled over a benchmark subset and per
+domain, so a \textsc{Combined} run's per-domain breakdown is directly
+comparable to the corresponding \textsc{Separate} run for that same
+domain.
+
+\subsection{Judging Reliability}
+\label{sec:eval-reliability}
+
+A judge call that raises an exception (rate limiting, transient network
+failure) is never folded into a \emph{no match} or \textsc{Not Related}
+judgment; such calls are excluded from recall's denominator and reported
+as a separate failure count, with an explicit warning when failures make
+up a large fraction of a run.
+
+\subsection{Downstream QA Evaluation on MuSiQue}
+\label{sec:eval-qa}
+
+Text2KGBench evaluation (\S\ref{sec:eval-design}--\S\ref{sec:eval-reliability})
+is \emph{intrinsic}: it scores extracted triples and induced types directly
+against a gold ontology, independent of any downstream use. It does not
+test the claim motivating OntoDisco in the first place
+(\S\ref{sec:introduction}): that a typed, hierarchically organized KG
+supports graph-based retrieval better than a flat one. We complement it
+with an \emph{extrinsic} evaluation on multi-hop question answering, where
+the KG is used, not just scored.
+
+\paragraph{Dataset.} We use 200 instances (2--4 hop questions) from the
+MuSiQue test set \citep{trivedi2022musique}, the same instances the raw
+triplet corpus fed into the pipeline (\S\ref{sec:eval-design}) was
+extracted from, so this evaluation reuses the pipeline's own KG rather
+than one built for a different corpus. Each MuSiQue instance bundles a
+question, a gold answer with optional answer aliases, and the $\sim$20
+supporting and distractor paragraphs the question's evidence is drawn
+from.
+
+\paragraph{Task and method.} We reuse the retrieval-and-answer procedure
+from Wikontic \citep{chepurova2026wikontic}: an LLM extracts candidate
+entity mentions from the question; each mention is linked, via
+embedding-similarity retrieval followed by a second LLM call that filters
+the retrieved shortlist for relevance, to entities in the KG; supporting
+triples are then collected by walking outward from the linked entities up
+to a fixed hop budget, only visiting entities newly reached by the
+previous hop; and a final LLM call answers the question from the
+collected triples alone. Wikontic canonicalizes entities and relations
+\emph{per instance}, so retrieval is naturally scoped to one instance's
+own small KG. OntoDisco canonicalizes \emph{across the whole corpus}
+(\S\ref{sec:methods}), so this scoping is reconstructed explicitly: every
+raw triplet is resolved to its canonical entity and relation identifiers
+via the induced vocabularies, and retrieval and hop-walking are then
+restricted to only the resolved triples originating from that question's
+own instance, before the walk ever begins.
+
+\paragraph{Metrics.} We report exact match and token-level F1 between the
+predicted answer and the gold answer, following the standard
+SQuAD/MuSiQue convention of maximizing each metric over the gold answer
+and its provided aliases, since a prediction need only match one
+acceptable reference string.
+
+\paragraph{Purpose.} Because the QA-answering LLM is fixed and
+independent of whichever backbone built the KG being evaluated (the same
+judge-independence design as \S\ref{sec:eval-design}), a change in
+exact-match/F1 across KGs built with different extraction backbones or
+different hierarchy-induction settings (backbone, \texttt{max\_depth},
+seed roots) isolates the effect of KG structure itself on downstream QA,
+rather than conflating it with a stronger or weaker answering model.
+
+% TODO: report exact-match/F1 once the full sweep across
+% output/checkpoints/run_* (varying backbone, max_depth, and seed roots)
+% has been scored with scripts/musique_qa_eval/run_qa_eval.py.
+
+\subsection{Downstream QA Evaluation on MINE}
+\label{sec:eval-mine}
+
+We complement \S\ref{sec:eval-qa} with a second extrinsic evaluation on
+\textbf{MINE} \citep{mo2025kggen}, the retrieval-and-judge benchmark KGGen
+itself is evaluated with. Where \S\ref{sec:eval-qa} reuses OntoDisco's own
+retrieval/hop-walking design (inherited from Wikontic
+\citep{chepurova2026wikontic}), MINE instead reuses KGGen's own evaluation
+harness unchanged, so the only thing that differs from KGGen's own reported
+numbers is the KG being queried -- OntoDisco's typed, hierarchically
+organized graph in place of KGGen's flat one.
+
+\paragraph{Dataset.} We use all 101 essays (topic and content) and their
+associated generated factual queries -- 1{,}500 in total -- from the
+\texttt{josancamon/kg-gen-MINE-evaluation-dataset} Hugging Face dataset
+built by KGGen's own \texttt{experiments/MINE} pipeline
+\citep{mo2025kggen}. Every essay's triplets are extracted
+(\S\ref{sec:extraction}) into one combined corpus and passed through the
+pipeline once, yielding a single shared ontology and KG spanning all 101
+essays, rather than one KG per essay.
+
+\paragraph{Task and method.} We mirror KGGen's own MINE methodology
+(\texttt{experiments/MINE/\_1\_evaluation.py}) exactly, for direct
+comparability to its reported numbers on the same benchmark: each generated
+query is both the retrieval query and the fact to check for. Context is
+retrieved from OntoDisco's constructed KG via KGGen's own
+\texttt{KGGen.retrieve()} (sentence-embedding similarity over entities
+followed by a fixed-depth graph walk, top-$k=8$), and an LLM judge is asked
+a single binary question -- whether the retrieved context contains the
+information stated in the query. Because the query already states the fact
+to verify, this needs no separate answer-generation step, unlike
+\S\ref{sec:eval-qa}'s MuSiQue evaluation.
+
+\paragraph{Metrics.} We report \emph{overall accuracy}: the fraction of the
+1{,}500 queries the judge scores as supported by their retrieved context,
+both pooled over the whole benchmark and broken down per essay.
+
+\paragraph{Purpose.} Because the judge and retrieval procedure are held
+fixed at KGGen's own settings, any difference between OntoDisco's accuracy
+here and KGGen's reported MINE accuracy isolates the effect of OntoDisco's
+added typing, canonicalization, and hierarchy-induction stages on
+retrieval quality, under the exact evaluation harness KGGen itself is
+scored with -- complementary to \S\ref{sec:eval-qa}, which instead isolates
+the effect of KG structure under OntoDisco's own retrieval design.
+
+% TODO: report overall accuracy (pooled and per-essay) once
+% scripts/mine_benchmark/run_judge_eval.py has been re-run against the
+% corrected pipeline's output/mine/kg_graph.json -- the hierarchy induction
+% prompt bug (escaped {{ }} in hierarchy_pairwise_action.txt leaking into
+% the LLM's own output and failing JSON parsing on every "none" decision)
+% was fixed after the numbers currently in output/mine/judge_results.json
+% and output/mine/judge_results_qualifiers.json were produced, so those
+% figures predate the fix and should not be reported as-is.
 
 \section*{Limitations}
 % TODO

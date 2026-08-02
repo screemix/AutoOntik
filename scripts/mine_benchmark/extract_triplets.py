@@ -78,8 +78,9 @@ def main():
     api_key = os.environ.get(config.llm.api_key_env)
     if not api_key:
         raise RuntimeError(f"Environment variable {config.llm.api_key_env!r} is not set")
+    proxy = os.environ.get(config.llm.proxy_key_env) if config.llm.proxy_key_env else None
 
-    extractor = LLMTripletExtractor(api_key=api_key, model=config.llm.model, base_url=config.llm.base_url)
+    extractor = LLMTripletExtractor(api_key=api_key, model=config.llm.model, base_url=config.llm.base_url, proxy=proxy)
 
     with open(args.essays, "r", encoding="utf-8") as f:
         essays = json.load(f)

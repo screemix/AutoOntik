@@ -44,6 +44,8 @@ class LLMTripletExtractor:
         "Openai/Gpt-oss-120b": {"input": 0.05, "output": 0.2},
         "Qwen/Qwen3-32B": {"input": 0.05, "output": 0.2},
         "openai/gpt-oss-120b": {"input": 0.05, "output": 0.2},
+        "Qwen/Qwen3-Next-80B-A3B-Instruct": {"input": 0.05, "output": 0.2},  # configs/qwen.yaml, same AIRI-gateway placeholder rate as the other AIRI-served models above
+        "openai/gpt-4o": {"input": 2.5, "output": 10},  # OpenRouter slug for the judge model -- same real per-token rate as "gpt-4o" above
     }
 
     def __init__(
@@ -81,6 +83,11 @@ class LLMTripletExtractor:
                 "cluster_relations": "cluster_relations.txt",
                 "hierarchy_pairwise_action": "hierarchy_pairwise_action.txt",
                 "relation_direction": "relation_direction.txt",
+                "triple_match": "triple_match.txt",
+                "type_compare": "type_compare.txt",
+                "question_entity_extractor": "question_entity_extraction.txt",
+                "question_entity_ranker": "question_entity_ranker.txt",
+                "qa": "qa_answer.txt",
             }
 
         # Load all prompts (paths may include subfolders, e.g. triplet_extraction/foo.txt)
@@ -386,6 +393,146 @@ class LLMTripletExtractor:
         # Defensively default any surface form the LLM omitted to "forward"
         # (no swap applied) rather than dropping it.
         return {sf: labels.get(sf, "forward") for sf in surface_forms}
+
+    def match_triple_with_llm(
+        self, gold_subject: str, gold_relation: str, gold_object: str,
+        candidates: list[tuple[str, str, str]],
+    ) -> Dict:
+        """
+        Match a reference (gold_subject, gold_relation, gold_object) triple
+        against a list of candidate (subject, relation, object) triples
+        extracted from the same sentence (see
+        scripts/text2kgbench_eval/run_judge_eval.py's per-sentence matching
+        loop, which shows this the REMAINING, not-yet-consumed candidate
+        bucket for one sentence and removes whichever one gets matched).
+
+        Returns {"match": <int index into candidates>, "direction": "same" |
+        "inverse"} if exactly one candidate expresses the same real-world
+        fact as the reference (possibly with subject/object swapped), or
+        {"match": None} if none do (including on an unparseable response --
+        that case is logged and defaulted, not raised). Does NOT catch
+        exceptions from the underlying API call itself -- callers must
+        handle those (see run_judge_eval.py's explicit call-failure
+        tracking, kept separate from a genuine "no match" judgment so an API
+        outage never gets silently counted as a real miss, mirroring the
+        documented lesson in scripts/mine_benchmark/run_judge_eval.py).
+        """
+        system_prompt = self.prompts["triple_match"]
+        candidates_str = "\n".join(
+            f"{i}: ({s}) -[{r}]-> ({o})" for i, (s, r, o) in enumerate(candidates)
+        )
+        user_prompt = (
+            f"Reference triple: ({gold_subject}) -[{gold_relation}]-> ({gold_object})\n"
+            f"Candidate triples:\n{candidates_str}"
+        )
+
+        response = self.get_completion(system_prompt=system_prompt, user_prompt=user_prompt)
+
+        logger.log(logging.DEBUG, f"Reference: {gold_subject}/{gold_relation}/{gold_object}")
+        logger.log(logging.DEBUG, f"Response: {response}")
+
+        if not isinstance(response, dict):
+            logger.warning("match_triple_with_llm: LLM returned unparseable response")
+            return {"match": None}
+
+        match = response.get("match")
+        if match is None:
+            return {"match": None}
+        if not isinstance(match, int) or not (0 <= match < len(candidates)):
+            logger.warning("match_triple_with_llm: LLM returned out-of-range match index %r", match)
+            return {"match": None}
+
+        direction = response.get("direction", "same")
+        if direction not in ("same", "inverse"):
+            direction = "same"
+
+        return {"match": match, "direction": direction}
+
+    def compare_types_with_llm(
+        self,
+        domain_pair: Optional[tuple],
+        range_pair: Optional[tuple],
+    ) -> Dict[str, Optional[str]]:
+        """
+        Compare our induced type against a reference ontology's type, for
+        the domain (subject) side and/or the range (object) side of a
+        matched relation instance. Each pair is (our_type_label,
+        reference_type_label); pass None for a side that has no reference
+        type to compare against (some Text2KGBench relations only specify a
+        domain, or only a range).
+
+        Returns {"domain": label|None, "range": label|None} where each
+        label (when the corresponding pair was given) is one of "exact" /
+        "more_general" / "more_narrow" / "not_related". A side that wasn't
+        given, or came back unparseable, is None -- never fabricated.
+        Does NOT catch exceptions from the underlying API call (see
+        match_triple_with_llm's docstring for why).
+        """
+        if domain_pair is None and range_pair is None:
+            return {"domain": None, "range": None}
+
+        system_prompt = self.prompts["type_compare"]
+        lines = []
+        if domain_pair:
+            lines.append(f"Domain/subject side -- our type: {domain_pair[0]!r}, reference type: {domain_pair[1]!r}")
+        if range_pair:
+            lines.append(f"Range/object side -- our type: {range_pair[0]!r}, reference type: {range_pair[1]!r}")
+        user_prompt = "\n".join(lines)
+
+        response = self.get_completion(system_prompt=system_prompt, user_prompt=user_prompt)
+
+        logger.log(logging.DEBUG, f"domain_pair={domain_pair} range_pair={range_pair}")
+        logger.log(logging.DEBUG, f"Response: {response}")
+
+        valid_labels = ("exact", "more_general", "more_narrow", "not_related")
+        if not isinstance(response, dict):
+            logger.warning("compare_types_with_llm: LLM returned unparseable response")
+            return {"domain": None, "range": None}
+
+        result = {"domain": None, "range": None}
+        if domain_pair and response.get("domain") in valid_labels:
+            result["domain"] = response["domain"]
+        if range_pair and response.get("range") in valid_labels:
+            result["range"] = response["range"]
+        return result
+
+    def extract_entities_from_question(self, question: str) -> list:
+        """
+        Extract entity mentions from a natural-language question (used by
+        QA evaluation to seed retrieval into a constructed KG -- see
+        scripts/musique_qa_eval/run_qa_eval.py). Mirrors Wikontic's
+        identify_relevant_entities_from_question_with_llm's first step.
+        Returns whatever the LLM produced (normally a list of strings);
+        callers must defensively handle a non-list response.
+        """
+        return self.get_completion(
+            system_prompt=self.prompts["question_entity_extractor"],
+            user_prompt=f"Question: {question}",
+        )
+
+    def identify_relevant_entities(
+        self, question: str, entity_list: List[Dict[str, str]]
+    ) -> list:
+        """
+        Re-rank/filter a batch of {"entity", "entity_type"} candidates
+        (typically an embedding-retrieval shortlist) for relevance to a
+        question. Returns whatever the LLM produced (normally a list of
+        {"entity", "entity_type"} dicts); callers must defensively handle a
+        non-list response.
+        """
+        return self.get_completion(
+            system_prompt=self.prompts["question_entity_ranker"],
+            user_prompt=f"Question: {question}\nEntities: {entity_list}",
+        )
+
+    def answer_question(self, question: str, triplets: List[dict]) -> str:
+        """Answer a question using a list of {subject, relation, object,
+        qualifiers} dicts retrieved from a constructed KG."""
+        return self.get_completion(
+            system_prompt=self.prompts["qa"],
+            user_prompt=f'Question: {question}\n\nTriplets: "{triplets}"',
+            transform_to_json=False,
+        )
 
     def calculate_cost(self) -> float:
         """Calculate the total cost of API usage."""

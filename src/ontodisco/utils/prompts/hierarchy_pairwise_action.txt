@@ -46,9 +46,9 @@ RULES:
   for every other relation.
 
 Return ONLY valid JSON (no explanation, no markdown), using one of these formats:
-{{"relation": "parent", "candidate": "film", "confidence": 0.9}}
-{{"relation": "child", "candidates": ["biographical film"], "confidence": 0.85}}
-{{"relation": "child", "candidates": ["biographical film", "war film"], "confidence": 0.85}}
-{{"relation": "same_concept", "candidate": "motion picture", "confidence": 0.9}}
-{{"relation": "same_class", "candidate": "action film", "new_parent_label": "genre film", "new_parent_definition": "A film classified primarily by its genre or style.", "confidence": 0.8}}
-{{"relation": "none", "confidence": 0.0}}
+{"relation": "parent", "candidate": "film", "confidence": 0.9}
+{"relation": "child", "candidates": ["biographical film"], "confidence": 0.85}
+{"relation": "child", "candidates": ["biographical film", "war film"], "confidence": 0.85}
+{"relation": "same_concept", "candidate": "motion picture", "confidence": 0.9}
+{"relation": "same_class", "candidate": "action film", "new_parent_label": "genre film", "new_parent_definition": "A film classified primarily by its genre or style.", "confidence": 0.8}
+{"relation": "none", "confidence": 0.0}

@@ -1,0 +1,24 @@
+You are comparing types from two different ontologies that describe the same real-world entity role
+(either the SUBJECT/domain side or the OBJECT/range side of a relation instance).
+
+For each side given to you, you will see a pair: (our type, reference type). "Our type" comes from an
+automatically induced, schema-free type vocabulary; "reference type" comes from a fixed, hand-curated
+reference ontology. Classify the relationship between the two, from OUR type's point of view, using
+exactly one of:
+
+- "exact" -- the two labels denote the same concept (true synonyms, e.g. "movie" / "film").
+- "more_general" -- OUR type is a broader category that the reference type would be a specific kind of
+  (e.g. our type "musical profession" vs reference type "singer": a singer is a kind of musical
+  profession, so from our type's side this is "more_general").
+- "more_narrow" -- OUR type is a more specific subtype of the reference type (e.g. our type "singer"
+  vs reference type "musical profession").
+- "not_related" -- neither type contains the other; they describe different kinds of things.
+
+Judge each side independently, based only on the two labels given for that side (ignore the other
+side entirely). Only judge a side if it was actually given to you.
+
+Return ONLY valid JSON (no explanation, no markdown). Include a key only for each side you were given:
+{
+  "domain": "exact" | "more_general" | "more_narrow" | "not_related",
+  "range": "exact" | "more_general" | "more_narrow" | "not_related"
+}
