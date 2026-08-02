@@ -137,7 +137,7 @@ These instructions should be used both for papers submitted for review and for f
 \section{Introduction}
 \label{sec:introduction}
 
-Retrieval-augmented generation (RAG) grounds large language model (LLM) outputs in evidence retrieved at inference time \citep{lewis2020rag}, but retrieval over unstructured, chunked text struggles with multi-hop questions whose evidence is scattered across many documents. Graph-based RAG addresses this by retrieving over a knowledge graph (KG) instead of flat passages to support multi-hop reasoning and
+Retrieval-augmented generation (RAG) grounds large language model (LLM) outputs in evidence retrieved at inference time \citep{lewis2020rag}, but retrieval over unstructured, chunked text struggles with multi-hop questions whose evidence is scattered across many chunks or documents. Graph-based RAG addresses this by retrieving over a knowledge graph (KG) instead of flat passages to support multi-hop reasoning and
 query-time generalization over specific mentions \citep{edge2024graphrag}.
 The quality of graph-based retrieval is therefore bounded by the quality of the KG that backs it: a graph with redundant, untyped nodes and unconstrained edges offers little more structure than the text it was extracted from \citep{chepurova2026wikontic}.
 
@@ -158,18 +158,18 @@ corpus's vocabulary.
 Recent work instead automates (i) directly from text with LLMs. KGGen \citep{mo2025kggen} extracts open-vocabulary triples and merges near-duplicate entity and relation surface forms through embedding-based clustering and LLM-adjudicated verification, producing a substantially cleaner graph than raw extraction alone. However, canonicalization in KGGen and other schema-free extraction pipeline is flat, so the resulting graph has no type hierarchy and no domain/range constraints. Without types, clustering has no symbolic signal to fall back on and must rely on embedding similarity and LLM judgment alone. This raises a concrete risk: distinct entities or relations that are surface-similar but semantically different (e.g., a film and a biography of its director) are more likely to be over-merged. A type hierarchy also gives downstream retrieval a coarser fallback unit when an exact entity or relation match is missed.
 
 Extending flat canonicalization into a typed, hierarchical ontology introduces three problems that flat deduplication never has to face.
-First, type labels are themselves open-vocabulary free text, so they need the same clustering-plus-LLM-verification treatment as entities and relations. But naively merging similar type labels tends to conflate a general category with its own specializations, for example \emph{film} and \emph{documentary film}. A documentary film participates in nearly every relation that a film does, so the two look embedding-similar even though one is strictly more specific than the other.
+First, type labels are themselves open-vocabulary free text, so they need the same clustering-plus-LLM-verification treatment as entities and relations. But naively merging similar type labels tends to conflate a general category with its own specializations, for example \emph{film} and \emph{documentary film}: the two look embedding-similar even though one is strictly more specific than the other.
 
-Second, inducing a hierarchy over the resulting canonical types is a separate problem from canonicalizing them. If placement happens in a single pass, or bottom-up, a type can get permanently attached under too general a parent. This happens whenever a more specific sibling type is only discovered later, since nothing revisits the earlier placement to correct it.Third, relation canonicalization merges surface forms without regard to grammatical role. A canonical relation can therefore silently pool a predicate together with its grammatical inverse (e.g.\ \emph{directed} and \emph{was directed by}). This fragments the domain/range evidence that constraint induction relies on, instead of reinforcing it.
+Second, inducing a hierarchy over the resulting canonical types is a separate problem from canonicalizing them. If placement happens in a single pass, or bottom-up, a type can get permanently attached under too general a parent. This happens whenever a more specific sibling type is only discovered later, since nothing revisits the earlier placement to correct it. Third, relation canonicalization merges surface forms without regard to grammatical role. A canonical relation can therefore silently pool a predicate together with its grammatical inverse (e.g.\ \emph{directed} and \emph{was directed by}). This fragments the domain/range evidence that constraint induction relies on, instead of reinforcing it.
 
-We present \textbf{OntoDisco}, a pipeline that extends KGGen's schema-free extract-then-canonicalize approach to close this gap: on top of a
+We present \textbf{OntoDisco}, a pipeline that extends schema-free approaches to close this gap: on top of a
 deduplicated entity and relation vocabulary, it produces a
 hyponymy-aware, hierarchically organized type vocabulary, an entity
 vocabulary deduplicated against that hierarchy, and a set of
-per-relation domain/range constraints mined from it
+per-relation domain/range constraints mined from it.
 (\S\ref{sec:methods}). Our contributions are:
 \begin{itemize}
-  \item OntoDisco, a schema-free typed extraction and
+  \item OntoDisco, extraction and
   canonicalization pipeline that induces a type hierarchy and
   domain/range constraints from raw text with no predefined schema
   (\S\ref{sec:methods}).
