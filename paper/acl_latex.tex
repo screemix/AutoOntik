@@ -31,6 +31,7 @@
 %additional package(s)
 \usepackage{graphicx}
 \usepackage{amsmath}
+\usepackage{booktabs}
 
 % For reproducing the LLM prompt templates verbatim in the appendix
 % (\S\ref{sec:appendix-prompts}), with automatic line wrapping so they fit
@@ -134,6 +135,13 @@ The document itself conforms to its own specifications, and is therefore an exam
 These instructions should be used both for papers submitted for review and for final versions of accepted papers.
 \end{abstract}
 
+\begin{figure}[t]
+\centering
+\includegraphics[height=0.46\textheight,keepaspectratio]{pipeline_architecture.pdf}
+\caption{The OntoDisco pipeline. A schema-free LLM extractor (\S\ref{sec:extraction}) produces raw triplets $\mathcal{G}=(s,t_s,r,o,t_o,Q)$, canonicalized into a relation vocabulary $\mathcal{R}^*$ (\S\ref{sec:relation-dedup}) and a type vocabulary $\mathcal{T}^*$ organized into a single-parent is-a hierarchy (\S\ref{sec:type-dedup}). Entity mentions are then deduplicated using that hierarchy as a symbolic gate (\S\ref{sec:entity-dedup}), and domain/range constraints are mined by re-resolving $\mathcal{G}$ against $\mathcal{R}^*$, $\mathcal{T}^*$, and the hierarchy (\S\ref{sec:constraints}). Colored dashed arrows mark additional direct inputs beyond the sequential chain; the dotted arrow is the one adjacent step pair with \emph{no} data dependency -- constraint induction never consumes entity deduplication's output.}
+\label{fig:pipeline}
+\end{figure}
+
 \section{Introduction}
 \label{sec:introduction}
 
@@ -181,7 +189,7 @@ per-relation domain/range constraints mined from it
 % \subsection{Overview}
 % \label{sec:methods-overview}
 
-OntoDisco turns a corpus of open-vocabulary into a canonicalized, typed knowledge graph: a deduplicated relation vocabulary, a deduplicated and hierarchically organized entity-type vocabulary, a deduplicated entity vocabulary with class assignments, and a set of relation-level domain/range constraints.
+OntoDisco turns a corpus of open-vocabulary into a canonicalized, typed knowledge graph: a deduplicated relation vocabulary, a deduplicated and hierarchically organized entity-type vocabulary, a deduplicated entity vocabulary with class assignments, and a set of relation-level domain/range constraints (Figure~\ref{fig:pipeline}).
 At first, a schema-free LLM extractor  (\S\ref{sec:extraction}) produces a collection of raw triplets: 
 \begin{equation}
 \mathcal{G} = (s, t_s, r, o, t_o, Q),
@@ -535,6 +543,68 @@ both pooled over the whole benchmark and broken down per essay.
 % was fixed after the numbers currently in output/mine/judge_results.json
 % and output/mine/judge_results_qualifiers.json were produced, so those
 % figures predate the fix and should not be reported as-is.
+
+\section{Results}
+\label{sec:results}
+
+We report results on the Wikidata-TekGen subset of Text2KGBench
+(\S\ref{sec:evaluation}) under the \textsc{Separate} condition, for both
+backbones. Results for the \textsc{Combined} condition and for the
+DBpedia-WebNLG subset are still being collected at submission time and are
+left for the camera-ready version.
+
+\subsection{Text2KGBench}
+\label{sec:results-text2kgbench}
+
+Table~\ref{tab:text2kgbench-separate} reports recall and extra rate
+(\S\ref{sec:evaluation}) per domain, for both backbones, under the
+\textsc{Separate} condition. Table~\ref{tab:text2kgbench-types} reports
+the pooled domain/range type-judgment distribution
+(\S\ref{sec:evaluation}) over matched pairs.
+
+\begin{table*}[t]
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+& \multicolumn{2}{c}{Recall} & \multicolumn{2}{c}{Extra rate} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5}
+Domain & Qwen3-Next-80B & gpt-oss-120b & Qwen3-Next-80B & gpt-oss-120b \\
+\midrule
+ont\_1\_movie     & -- & -- & -- & -- \\
+ont\_2\_music     & -- & -- & -- & -- \\
+ont\_3\_sport     & -- & -- & -- & -- \\
+ont\_4\_book      & -- & -- & -- & -- \\
+ont\_5\_military  & -- & -- & -- & -- \\
+ont\_6\_computer  & -- & -- & -- & -- \\
+ont\_7\_space     & -- & -- & -- & -- \\
+ont\_8\_politics  & -- & -- & -- & -- \\
+ont\_9\_nature    & -- & -- & -- & -- \\
+ont\_10\_culture  & -- & -- & -- & -- \\
+\midrule
+Pooled & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\caption{Recall and extra rate (\S\ref{sec:eval-metrics}) per Wikidata-TekGen domain, \textsc{Separate} condition, judged by GPT-4o \citep{openai2024gpt4o}.}
+\label{tab:text2kgbench-separate}
+\end{table*}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{llcccc}
+\toprule
+Model & Side & Exact & More Gen. & More Narrow & Not Rel. \\
+\midrule
+Qwen3-Next-80B & Domain & -- & -- & -- & -- \\
+Qwen3-Next-80B & Range  & -- & -- & -- & -- \\
+gpt-oss-120b   & Domain & -- & -- & -- & -- \\
+gpt-oss-120b   & Range  & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\caption{Domain/range type-judgment distribution (\S\ref{sec:eval-types}), pooled over matched pairs across all Wikidata-TekGen domains, \textsc{Separate} condition.}
+\label{tab:text2kgbench-types}
+\end{table}
 
 \section*{Limitations}
 % TODO
