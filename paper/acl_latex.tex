@@ -49,6 +49,8 @@
   xleftmargin=3pt,
   xrightmargin=3pt,
   captionpos=b,
+  float,
+  floatplacement=tbp,
 }
 
 % If the title and author information does not fit in the area allocated, uncomment the following
@@ -567,8 +569,6 @@ You are an algorithm designed to extract structured knowledge from texts to buil
 
 Additionally, some triplets may have **qualifiers** that provide more context (e.g., date, place, or other attributes). Qualifiers should have relations and object like triplets do, but instead of subject their relation connects an object and the triplet qualifier belongs to. **Qualifiers must always be attached to a triplet** and never exist as standalone triplets.
 
-Keep the main triplet's **relation** general: fold any detail that could vary (measure, place, method, time, etc.) into a role-labeled qualifier rather than the relation text — and when several entities participate, keep only the most central as object, qualifier the rest.
-
 You will receive a text labeled **"Text:"**. Your task is to extract meaningful triplets that represent factual relationships.
 
 ### Output Format
@@ -770,12 +770,12 @@ RULES:
   for every other relation.
 
 Return ONLY valid JSON (no explanation, no markdown), using one of these formats:
-{{"relation": "parent", "candidate": "film", "confidence": 0.9}}
-{{"relation": "child", "candidates": ["biographical film"], "confidence": 0.85}}
-{{"relation": "child", "candidates": ["biographical film", "war film"], "confidence": 0.85}}
-{{"relation": "same_concept", "candidate": "motion picture", "confidence": 0.9}}
-{{"relation": "same_class", "candidate": "action film", "new_parent_label": "genre film", "new_parent_definition": "A film classified primarily by its genre or style.", "confidence": 0.8}}
-{{"relation": "none", "confidence": 0.0}}
+{"relation": "parent", "candidate": "film", "confidence": 0.9}
+{"relation": "child", "candidates": ["biographical film"], "confidence": 0.85}
+{"relation": "child", "candidates": ["biographical film", "war film"], "confidence": 0.85}
+{"relation": "same_concept", "candidate": "motion picture", "confidence": 0.9}
+{"relation": "same_class", "candidate": "action film", "new_parent_label": "genre film", "new_parent_definition": "A film classified primarily by its genre or style.", "confidence": 0.8}
+{"relation": "none", "confidence": 0.0}
 \end{lstlisting}
 
 \subsection{Entity-Name Cluster Verification}
