@@ -622,43 +622,53 @@ gpt-oss-120b   & Range  & 57.7 & 21.7 & 14.3 & 6.3 \\
 \label{sec:results-dbpedia}
 
 Table~\ref{tab:dbpedia-webnlg-separate} reports recall and extra rate for
-gpt-oss-120b on all 19 DBpedia-WebNLG domains. Unlike Table~\ref{tab:text2kgbench-separate}. As DBpedia-WebNLG's sentences are generated directly from
-the gold triples (WebNLG's own construction method) rather than sampled
-from Wikipedia article bodies, we did not perform a groundness check. Averaged recall is 78.8\%, with a 23.0\% extra rate.
+both backbones on all 19 DBpedia-WebNLG domains. Unlike
+Table~\ref{tab:text2kgbench-separate}, these figures are not passed
+through a groundedness filter: DBpedia-WebNLG's sentences are generated
+directly from the gold triples (WebNLG's own construction method) rather
+than sampled from Wikipedia article bodies, so we did not perform a
+groundedness check for this subset. Pooled recall is 78.8\% for
+gpt-oss-120b and 76.2\% for Qwen3-Next-80B, with extra rates of 23.0\%
+and 25.1\% respectively -- the two backbones perform much more similarly
+here than on Wikidata-TekGen's domain/range type-judgment
+(Table~\ref{tab:text2kgbench-types}), where the gap between them was
+substantially wider.
 
-\begin{table}[t]
+\begin{table*}[t]
 \centering
 \small
-\begin{tabular}{lcc}
+\begin{tabular}{lcccc}
 \toprule
-Domain & Recall (\%) & Extra rate (\%) \\
+& \multicolumn{2}{c}{Recall (\%, unfiltered)} & \multicolumn{2}{c}{Extra rate (\%)} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5}
+Domain & Qwen3-Next-80B & gpt-oss-120b & Qwen3-Next-80B & gpt-oss-120b \\
 \midrule
-ont\_1\_university            & 71.0 & 23.9 \\
-ont\_2\_musicalwork           & 80.0 & 30.8 \\
-ont\_3\_airport               & 81.9 & 22.1 \\
-ont\_4\_building              & 73.1 & 21.0 \\
-ont\_5\_athlete               & 94.0 & 6.0  \\
-ont\_6\_politician            & 80.0 & 16.7 \\
-ont\_7\_company               & 82.8 & 13.9 \\
-ont\_8\_celestialbody         & 92.8 & 9.6  \\
-ont\_9\_astronaut             & 74.9 & 24.3 \\
-ont\_10\_comicscharacter      & 85.0 & 13.3 \\
-ont\_11\_meanoftransportation & 80.4 & 15.3 \\
-ont\_12\_monument             & 65.5 & 47.1 \\
-ont\_13\_food                 & 67.7 & 42.1 \\
-ont\_14\_writtenwork          & 79.8 & 17.2 \\
-ont\_15\_sportsteam           & 80.0 & 12.8 \\
-ont\_16\_city                 & 63.9 & 37.6 \\
-ont\_17\_artist               & 77.0 & 22.1 \\
-ont\_18\_scientist            & 87.8 & 12.6 \\
-ont\_19\_film                 & 94.4 & 16.6 \\
+ont\_1\_university            & 71.0 & 71.0 & 29.5 & 23.9 \\
+ont\_2\_musicalwork           & 75.7 & 80.0 & 28.3 & 30.8 \\
+ont\_3\_airport               & 82.3 & 81.9 & 23.5 & 22.1 \\
+ont\_4\_building              & 69.6 & 73.1 & 31.7 & 21.0 \\
+ont\_5\_athlete               & 87.3 & 94.0 & 11.5 & 6.0  \\
+ont\_6\_politician            & 79.5 & 80.0 & 16.6 & 16.7 \\
+ont\_7\_company               & 72.6 & 82.8 & 21.9 & 13.9 \\
+ont\_8\_celestialbody         & 90.6 & 92.8 & 7.3  & 9.6  \\
+ont\_9\_astronaut             & 66.3 & 74.9 & 30.2 & 24.3 \\
+ont\_10\_comicscharacter      & 82.2 & 85.0 & 10.2 & 13.3 \\
+ont\_11\_meanoftransportation & 75.0 & 80.4 & 19.5 & 15.3 \\
+ont\_12\_monument             & 61.8 & 65.5 & 50.0 & 47.1 \\
+ont\_13\_food                 & 69.7 & 67.7 & 36.3 & 42.1 \\
+ont\_14\_writtenwork          & 80.8 & 79.8 & 17.4 & 17.2 \\
+ont\_15\_sportsteam           & 75.8 & 80.0 & 16.7 & 12.8 \\
+ont\_16\_city                 & 63.3 & 63.9 & 44.2 & 37.6 \\
+ont\_17\_artist               & 71.0 & 77.0 & 28.7 & 22.1 \\
+ont\_18\_scientist            & 85.9 & 87.8 & 12.4 & 12.6 \\
+ont\_19\_film                 & 91.8 & 94.4 & 16.6 & 16.6 \\
 \midrule
-Averaged & 78.8 & 23.0 \\
+Pooled & 76.2 & 78.8 & 25.1 & 23.0 \\
 \bottomrule
 \end{tabular}
-\caption{Recall (unfiltered, see \S\ref{sec:results-dbpedia}) and extra rate (\S\ref{sec:evaluation}) per DBpedia-WebNLG domain, gpt-oss-120b\citep{openai2024gpt4o}.}
+\caption{Recall (unfiltered, see \S\ref{sec:results-dbpedia}) and extra rate (\S\ref{sec:evaluation}) per DBpedia-WebNLG domain, \textsc{Separate} condition, judged by GPT-4o \citep{openai2024gpt4o}.}
 \label{tab:dbpedia-webnlg-separate}
-\end{table}
+\end{table*}
 
 \subsection{MINE}
 \label{sec:results-mine}
