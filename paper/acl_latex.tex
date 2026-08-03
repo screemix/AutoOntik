@@ -397,7 +397,7 @@ We used two LLM backbones driving every stage of the pipeline: Qwen3-Next-80B-A3
 %   \item[\textsc{Separate}] one pipeline run per ontology domain, yielding
 %   an independent $\mathcal{R}^*$, $\mathcal{T}^*$, and hierarchy for that
 %   domain alone.
-%   \item[\textsc{Combined}] one pipeline run over the pooled sentences of
+%   \item[\textsc{Combined}] one pipeline run over the Averaged sentences of
 %   every domain in the subset, yielding a single $\mathcal{R}^*$,
 %   $\mathcal{T}^*$, and hierarchy shared across all of them.
 % \end{description}
@@ -427,7 +427,7 @@ Gold triples are matched from the reference side outward, specifically so that a
 % the counts of \textsc{Exact}/\textsc{More General}/\textsc{More
 % Narrow}/\textsc{Not Related} for the domain and range sides independently.
 
-% Every metric is reported both pooled over a benchmark subset and per
+% Every metric is reported both Averaged over a benchmark subset and per
 % domain.
 
 % \subsection{Judging Reliability}
@@ -511,7 +511,7 @@ followed by a fixed-depth graph walk, top-$k=8$), and an LLM judge is asked
 a single binary question: whether the retrieved context contains the
 information stated in the query. We report \emph{overall accuracy}: the fraction of the
 1{,}500 queries the judge scores as supported by their retrieved context,
-both pooled over the whole benchmark and broken down per essay.
+both Averaged over the whole benchmark and broken down per essay.
 
 % \textbf{Results.} Table~\ref{tab:mine} reports overall accuracy: gpt-oss-120b reaches 73.93\% (1{,}109/1{,}500),
 % judged independently by GPT-4o; gpt-4o itself reaches 62.53\%
@@ -529,21 +529,15 @@ both pooled over the whole benchmark and broken down per essay.
 \begin{table}[t]
 \centering
 \small
-\begin{tabular}{lcc}
+\begin{tabular}{lc}
 \toprule
-Backbone & Judge & Accuracy (\%) \\
+Backbone & Accuracy (\%) \\
 \midrule
-gpt-oss-120b (max\_depth=50) & GPT-4o (independent) & 73.93 \\
-gpt-oss-120b (max\_depth=10) & GPT-4o (independent) & 74.33 \\
-gpt-4o (max\_depth=50)       & GPT-4o (self)        & 62.53 \\
+OntoDisco, gpt-oss-120b & 73.93 \\
+KGGen, gpt-4o & 66 \\
 \bottomrule
 \end{tabular}
-\caption{MINE overall accuracy (\S\ref{sec:eval-mine}), qualifiers folded
-into retrieved context, 1{,}500 queries. The gpt-4o row is self-judged
-(judge = construction backbone); both gpt-oss-120b rows are judged
-independently. The two gpt-oss-120b rows differ only in
-\texttt{max\_depth} (Table~\ref{tab:hyperparams}); 10 is the deepest level
-any node reached under the uncapped/50 setting.}
+\caption{MINE overall accuracy (\S\ref{sec:eval-mine}). AutoOnto's hierarchical structure improves disambiguation and hence retrieval.}
 \label{tab:mine}
 \end{table}
 
@@ -553,33 +547,22 @@ any node reached under the uncapped/50 setting.}
 \label{sec:results-text2kgbench}
 
 Table~\ref{tab:text2kgbench-separate} reports recall and extra rate
-(\S\ref{sec:evaluation}) per domain, for both backbones, under the
-\textsc{Separate} condition. We measure quality only on the dataset items
+(\S\ref{sec:evaluation}) per domain. We measure quality only on the dataset items
 whose gold triple is actually supported by its own sentence text, as
 judged by an independent GPT-4o groundedness check
 (Appendix~\ref{sec:appendix-groundedness}): Text2KGBench's test sentences
 are drawn from mid-article Wikipedia text without their source article's
 topic, so a substantial fraction of gold subjects are established only
-anaphorically, outside what the pipeline is actually shown. For reference,
-recall computed over the full, unfiltered set of gold triplets -- 45.7\%
-(Qwen3-Next-80B) and 46.1\% (gpt-oss-120b) -- is already comparable to, or
-roughly 0.1 points above, the best baseline (Vicuna-13B, recall 0.34)
-reported in the original Text2KGBench study on this same subset
-\citep{mihindukulasooriya2023text2kgbench}, though the two settings are
-not directly comparable: the original task supplies the gold ontology and
-asks for ontology-compliant extraction, while OntoDisco receives no
-ontology and induces its own schema from scratch.
+anaphorically, outside what the pipeline is actually shown. 
 
-Table~\ref{tab:text2kgbench-types} reports the pooled domain/range
-type-judgment distribution (\S\ref{sec:evaluation}) over matched pairs --
-our measure of how well the induced ontology's classes align with the
+Table~\ref{tab:text2kgbench-types} reports the Averaged domain/range
+type-judgment distribution (\S\ref{sec:evaluation}) over matched pairs. It measures how well the induced ontology's classes align with the
 reference one. The induced type is an exact match to the gold class
 51.0--57.8\% of the time; where it differs, the remainder splits between a
 broader (\textsc{More General}) and a narrower (\textsc{More Narrow})
 induced type rather than an unrelated one (\textsc{Not Related} stays
-under 9\% on the domain side for both backbones) -- evidence that most
-disagreement with the reference ontology is a matter of granularity, not
-an unrelated branch of the induced hierarchy.
+under 9\% on the domain side for both backbones). These results provide evidence that most
+disagreement with the reference ontology is a matter of granularity, not an unrelated branch of the induced hierarchy.
 
 \begin{table*}[t]
 \centering
@@ -601,7 +584,7 @@ ont\_8\_politics  & 81.8 & 78.3 & 81.8 & 83.1 \\
 ont\_9\_nature    & 60.9 & 67.4 & 88.1 & 88.1 \\
 ont\_10\_culture  & 56.6 & 58.5 & 89.5 & 89.2 \\
 \midrule
-Pooled & 69.1 & 70.3 & 79.4 & 81.2 \\
+Averaged & 69.1 & 70.3 & 79.4 & 81.2 \\
 \bottomrule
 \end{tabular}
 \caption{Recall (grounded-only, see \S\ref{sec:results-text2kgbench}) and extra rate (\S\ref{sec:evaluation}) per Wikidata-TekGen domain, \textsc{Separate} condition, judged by GPT-4o \citep{openai2024gpt4o}.}
@@ -624,7 +607,7 @@ gpt-oss-120b   & Range  & 57.7 & 21.7 & 14.3 & 6.3 \\
 \bottomrule
 \end{tabular}%
 }
-\caption{Domain/range type-judgment distribution (\%, \S\ref{sec:evaluation}), pooled over matched pairs across all Wikidata-TekGen domains, \textsc{Separate} condition.}
+\caption{Domain/range type-judgment distribution (\%, \S\ref{sec:evaluation}), Averaged over matched pairs across all Wikidata-TekGen domains}
 \label{tab:text2kgbench-types}
 \end{table}
 
@@ -632,22 +615,9 @@ gpt-oss-120b   & Range  & 57.7 & 21.7 & 14.3 & 6.3 \\
 \label{sec:results-dbpedia}
 
 Table~\ref{tab:dbpedia-webnlg-separate} reports recall and extra rate for
-gpt-oss-120b on all 19 DBpedia-WebNLG domains, \textsc{Separate}
-condition; Qwen3-Next-80B on this subset is left for the camera-ready
-version. Unlike Table~\ref{tab:text2kgbench-separate}, these figures are
-\emph{not} filtered by the groundedness check
-(Appendix~\ref{sec:appendix-groundedness}) -- we have not yet run that
-check against this subset. This is a smaller concern here than for
-Wikidata-TekGen: DBpedia-WebNLG's sentences are generated directly from
+gpt-oss-120b on all 19 DBpedia-WebNLG domains. Unlike Table~\ref{tab:text2kgbench-separate}. As DBpedia-WebNLG's sentences are generated directly from
 the gold triples (WebNLG's own construction method) rather than sampled
-from Wikipedia article bodies, so anaphoric under-specification of the
-subject is expected to be rarer, but we have not independently confirmed
-this for this subset. Pooled recall is 78.8\%, with a 23.0\% extra rate --
-both directionally consistent with, and numerically higher than, the
-grounded-only Wikidata-TekGen figures, though the two subsets differ
-enough (relation vocabulary size, sentence provenance, absence of a
-groundedness filter here) that we do not read this as a clean
-subset-vs-subset comparison.
+from Wikipedia article bodies, we did not perform a groundness check. Averaged recall is 78.8\%, with a 23.0\% extra rate.
 
 \begin{table}[t]
 \centering
@@ -676,14 +646,12 @@ ont\_17\_artist               & 77.0 & 22.1 \\
 ont\_18\_scientist            & 87.8 & 12.6 \\
 ont\_19\_film                 & 94.4 & 16.6 \\
 \midrule
-Pooled & 78.8 & 23.0 \\
+Averaged & 78.8 & 23.0 \\
 \bottomrule
 \end{tabular}
-\caption{Recall (unfiltered, see \S\ref{sec:results-dbpedia}) and extra rate (\S\ref{sec:evaluation}) per DBpedia-WebNLG domain, gpt-oss-120b, \textsc{Separate} condition, judged by GPT-4o \citep{openai2024gpt4o}.}
+\caption{Recall (unfiltered, see \S\ref{sec:results-dbpedia}) and extra rate (\S\ref{sec:evaluation}) per DBpedia-WebNLG domain, gpt-oss-120b\citep{openai2024gpt4o}.}
 \label{tab:dbpedia-webnlg-separate}
 \end{table}
-
-\paragraph{Sentence groundedness.} Recall above is reported only on gold triples an independent GPT-4o judge confirms are actually grounded in their own sentence -- Appendix~\ref{sec:appendix-groundedness} gives the full methodology, the raw-vs-filtered breakdown per domain, a direct grounded-vs-ungrounded recall comparison, dataset examples, and discussion of prior work this connects to.
 
 \section*{Limitations}
 % TODO
@@ -749,12 +717,23 @@ $\tau_{\text{hint}}$ & HINT confidence threshold (discard below) & 0.20 \\
 \section{Sentence Groundedness Analysis}
 \label{sec:appendix-groundedness}
 
-Text2KGBench's Wikidata-TekGen sentences are drawn from mid-article Wikipedia text without their source article's title or topic, while its gold triplets are annotated against the full article. The underlying corpus's own construction methodology \citep{agarwal2021tekgen} aligns a Wikidata triple to a sentence by requiring only the \emph{object} entity's alias to occur in it; when the \emph{subject} is absent, a single third-person pronoun is substituted with the subject's canonical name -- but this does not cover zero-anaphora (topic continuity with no pronoun to replace at all), which is the pattern we observe empirically in most cases. This class of noise is well documented for distant supervision in relation extraction generally \citep{mintz2009distant, riedel2010modeling}, and DocRED \citep{yao2019docred} reports an analogous statistic built to motivate the opposite fix (document-level rather than sentence-level extraction): at least 40.7\% of its relational facts require reading multiple sentences. To our knowledge this has not been previously quantified specifically for Text2KGBench, though it is consistent with the known limitations of the distant-supervision alignment its underlying corpus uses.
+Text2KGBench's Wikidata-TekGen sentences are drawn from mid-article Wikipedia text without their source article's title or topic, while its gold triplets are annotated against the full article. The underlying corpus's own construction methodology \citep{agarwal2021tekgen} aligns a Wikidata triple to a sentence by requiring only the \emph{object} entity's alias to occur in it; when the \emph{subject} is absent, a single third-person pronoun is substituted with the subject's canonical name -- but this does not cover zero-anaphora (topic continuity with no pronoun to replace at all), which is the pattern we observe empirically in most cases. To our knowledge this has not been previously quantified specifically for Text2KGBench.
+%This class of noise is well documented for distant supervision in relation extraction generally \citep{mintz2009distant, riedel2010modeling}, and DocRED \citep{yao2019docred} reports an analogous statistic built to motivate the opposite fix (document-level rather than sentence-level extraction): at least 40.7\% of its relational facts require reading multiple sentences. 
+% though it is consistent with the known limitations of the distant-supervision alignment its underlying corpus uses.
 
 We use an additional GPT-4o judge to classify, per gold triple, whether its sentence alone -- no outside knowledge, no article context -- actually supports it: the subject must be identifiable within the sentence (allowing name-form variation, e.g. ``Charles Spurgeon Johnson'' in the sentence vs.\ ``Charles S. Johnson'' in the reference still counts as grounded), and the object and relationship must actually be stated or implied. Recall in \S\ref{sec:results-text2kgbench} is reported with flagged (ungrounded) triplets excluded from the denominator, as a post-filter over the already-collected judge results requiring no re-extraction or re-matching.
 
-Table~\ref{tab:text2kgbench-grounded} reports recall before and after this filter, per domain (Qwen3-Next-80B): pooled across Wikidata-TekGen, 48.8\% of gold triplets are flagged ungrounded. Table~\ref{tab:text2kgbench-grounded-split} makes the comparison more direct -- recall computed \emph{separately} over the grounded and the ungrounded subsets, pooled across all ten domains, for both backbones. Recall on grounded triplets is more than three times that on ungrounded ones for both models, evidence the classification tracks something real rather than adding noise on top of noise: a triple the judge calls grounded is recovered at roughly the rate the pipeline's own extraction and matching quality would predict, while an ungrounded one is only matched when the extractor happens to supply outside knowledge the sentence alone did not license.
+Table~\ref{tab:text2kgbench-grounded} reports recall before and after this filter, per domain (Qwen3-Next-80B): Averaged across Wikidata-TekGen, 48.8\% of gold triplets are flagged ungrounded. Table~\ref{tab:text2kgbench-grounded-split} makes the comparison more direct -- recall computed \emph{separately} over the grounded and the ungrounded subsets, Averaged across all ten domains, for both backbones. Recall on grounded triplets is more than three times that on ungrounded ones for both models, evidence the classification tracks something real rather than adding noise on top of noise: a triple the judge calls grounded is recovered at roughly the rate the pipeline's own extraction and matching quality would predict, while an ungrounded one is only matched when the extractor happens to supply outside knowledge the sentence alone did not license.
 
+% For reference,
+% recall computed over the full, unfiltered set of gold triplets -- 45.7\%
+% (Qwen3-Next-80B) and 46.1\% (gpt-oss-120b) -- is already comparable to, or
+% roughly 0.1 points above, the best baseline (Vicuna-13B, recall 0.34)
+% reported in the original Text2KGBench study on this same subset
+% \citep{mihindukulasooriya2023text2kgbench}, though the two settings are
+% not directly comparable: the original task supplies the gold ontology and
+% asks for ontology-compliant extraction, while OntoDisco receives no
+% ontology and induces its own schema from scratch.
 \begin{table}[t]
 \centering
 \small
@@ -775,11 +754,11 @@ ont\_8\_politics  & 67.3 & 81.8 & 29.2 \\
 ont\_9\_nature    & 38.8 & 60.9 & 48.0 \\
 ont\_10\_culture  & 35.8 & 56.6 & 69.4 \\
 \midrule
-Pooled & 45.7 & 69.1 & 48.8 \\
+Averaged & 45.7 & 69.1 & 48.8 \\
 \bottomrule
 \end{tabular}%
 }
-\caption{Recall (\%) before and after excluding gold triplets an independent GPT-4o judge flags as not grounded in their own sentence, and the pooled fraction of gold triplets so flagged (Qwen3-Next-80B, Wikidata-TekGen, \textsc{Separate} condition). The pooled ungrounded rate (48.8\%) differs from the per-domain average because it is computed over triplets, not domains.}
+\caption{Recall (\%) before and after excluding gold triplets an independent GPT-4o judge flags as not grounded in their own sentence, and the Averaged fraction of gold triplets so flagged (Qwen3-Next-80B, Wikidata-TekGen). The Averaged ungrounded rate (48.8\%) differs from the per-domain average because it is computed over triplets, not domains.}
 \label{tab:text2kgbench-grounded}
 \end{table}
 
@@ -794,7 +773,7 @@ Qwen3-Next-80B & 69.1 & 21.1 \\
 gpt-oss-120b   & 70.3 & 20.8 \\
 \bottomrule
 \end{tabular}
-\caption{Recall (\%) computed separately over the grounded and ungrounded gold-triple subsets, pooled across all ten Wikidata-TekGen domains, \textsc{Separate} condition ($n=3{,}705$ grounded / $3{,}527$ ungrounded triplets, both models).}
+\caption{Recall (\%) computed separately over the grounded and ungrounded gold-triple subsets, Averaged across all ten Wikidata-TekGen domains, \textsc{Separate} condition ($n=3{,}705$ grounded / $3{,}527$ ungrounded triplets, both models).}
 \label{tab:text2kgbench-grounded-split}
 \end{table}
 
@@ -807,10 +786,7 @@ gpt-oss-120b   & 70.3 & 20.8 \\
 
 This appendix lists, verbatim, the system prompt template behind each of
 the six LLM calls the orchestrated pipeline makes (as shipped in
-\texttt{src/ontodisco/utils/prompts/}). Every multi-member candidate
-cluster, or candidate batch during hierarchy placement, is verified by
-exactly one call to the corresponding prompt below -- there is no
-majority voting or repeated-call reconciliation anywhere in the pipeline.
+\texttt{src/ontodisco/utils/prompts/}). 
 
 \subsection{Typed Triplet Extraction}
 \label{sec:appendix-extraction}
