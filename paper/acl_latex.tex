@@ -623,6 +623,8 @@ Pooled & 69.1 & 70.3 & 79.4 & 81.2 \\
 \begin{table}[t]
 \centering
 \small
+\setlength{\tabcolsep}{3pt}
+\resizebox{\columnwidth}{!}{%
 \begin{tabular}{llcccc}
 \toprule
 Model & Side & Exact & More Gen. & More Narrow & Not Rel. \\
@@ -632,7 +634,8 @@ Qwen3-Next-80B & Range  & 54.2 & 29.1 & 10.1 & 6.7 \\
 gpt-oss-120b   & Domain & 57.8 & 10.8 & 23.1 & 8.3 \\
 gpt-oss-120b   & Range  & 57.7 & 21.7 & 14.3 & 6.3 \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \caption{Domain/range type-judgment distribution (\%, \S\ref{sec:evaluation}), pooled over matched pairs across all Wikidata-TekGen domains, \textsc{Separate} condition.}
 \label{tab:text2kgbench-types}
 \end{table}
@@ -642,6 +645,8 @@ gpt-oss-120b   & Range  & 57.7 & 21.7 & 14.3 & 6.3 \\
 \begin{table}[t]
 \centering
 \small
+\setlength{\tabcolsep}{3pt}
+\resizebox{\columnwidth}{!}{%
 \begin{tabular}{lccc}
 \toprule
 Domain & Raw & Filtered & Ungr. (\%) \\
@@ -659,7 +664,8 @@ ont\_10\_culture  & 35.8 & 56.6 & 69.4 \\
 \midrule
 Pooled & 45.7 & 69.1 & 48.8 \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \caption{Recall (\%) before and after excluding gold triples an independent GPT-4o judge flags as not grounded in their own sentence, and the pooled fraction of gold triples so flagged (Qwen3-Next-80B, Wikidata-TekGen, \textsc{Separate} condition). The pooled ungrounded rate (48.8\%) differs from the per-domain average because it is computed over triples, not domains.}
 \label{tab:text2kgbench-grounded}
 \end{table}
@@ -679,7 +685,7 @@ Pooled & 45.7 & 69.1 & 48.8 \\
 
 Table~\ref{tab:hyperparams} lists every hyperparameter referenced by symbol in \S\ref{sec:methods}, together with the value used for both reported backbones (Qwen3-Next-80B-A3B-Instruct and gpt-oss-120b, \S\ref{sec:evaluation}), which are run with an identical configuration apart from the LLM endpoint itself.
 
-\begin{table}[t]
+\begin{table*}[t]
 \centering
 \small
 \begin{tabular}{llr}
@@ -723,7 +729,7 @@ $\tau_{\text{hint}}$ & HINT confidence threshold (discard below) & 0.20 \\
 \end{tabular}
 \caption{Pipeline hyperparameters. All HDBSCAN thresholds $\theta$ are cosine-similarity thresholds; HDBSCAN's own \texttt{cluster\_selection\_epsilon} is set to $1-\theta$. \textsuperscript{$\dagger$}Seed-hierarchy ablation runs (\S\ref{sec:hierarchy-induction}) use $D_{\max}=10$ instead of 50; every other value is unchanged across every reported configuration. The parallel-worker count affects wall-clock time only -- cluster-verification order is reassembled deterministically regardless of completion order (\S\ref{sec:reoccurring-design}).}
 \label{tab:hyperparams}
-\end{table}
+\end{table*}
 
 \section{Prompt Templates}
 \label{sec:appendix-prompts}
