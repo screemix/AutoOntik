@@ -130,9 +130,7 @@
 \begin{document}
 \maketitle
 \begin{abstract}
-This document is a supplement to the general instructions for *ACL authors. It contains instructions for using the \LaTeX{} style files for ACL conferences.
-The document itself conforms to its own specifications, and is therefore an example of what your manuscript should look like.
-These instructions should be used both for papers submitted for review and for final versions of accepted papers.
+Graph-based retrieval-augmented generation depends on the quality of the knowledge graph (KG) it retrieves over, yet schema-free LLM-based extraction pipelines typically produce flat graphs: deduplicated entities and relations with no type hierarchy and no domain/range constraints. We present OntoDisco, a pipeline that extends schema-free KG construction with hyponymy-aware type canonicalization, a priority-ordered hierarchy induction procedure that lets a later, more specific type retroactively correct an earlier, too-general placement, entity deduplication gated by the induced hierarchy, and domain/range constraint mining -- all without a predefined schema. We evaluate OntoDisco both intrinsically, against the reference ontologies of Text2KGBench's Wikidata-TekGen and DBpedia-WebNLG subsets, and extrinsically, on downstream retrieval accuracy on the MINE benchmark. Across two LLM backbones, OntoDisco's induced types agree with the reference ontology's domain and range classes on a majority of matched relations, and where they disagree, the mismatch is overwhelmingly a matter of granularity rather than an unrelated branch of the induced hierarchy. On MINE, a knowledge graph built around OntoDisco's typed, hierarchically organized structure correctly answers a majority of retrieval queries. Beyond the pipeline itself, we propose an evaluation methodology for schema-free ontology induction that scores an induced hierarchy directly against a benchmark's own reference ontology without ever supplying that ontology to the pipeline.
 \end{abstract}
 
 \begin{figure}[t]
