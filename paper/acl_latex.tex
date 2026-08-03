@@ -163,7 +163,7 @@ DOLCE \citep{borgo2023dolce} offer stable, philosophically motivated
 top-level structure but cannot be extended automatically to an arbitrary
 corpus's vocabulary.
 
-Recent work instead automates (i) directly from text with LLMs. KGGen \citep{mo2025kggen} extracts open-vocabulary triples and merges near-duplicate entity and relation surface forms through embedding-based clustering and LLM-adjudicated verification, producing a substantially cleaner graph than raw extraction alone. However, canonicalization in KGGen and other schema-free extraction pipeline is flat, so the resulting graph has no type hierarchy and no domain/range constraints. Without types, clustering has no symbolic signal to fall back on and must rely on embedding similarity and LLM judgment alone. This raises a concrete risk: distinct entities or relations that are surface-similar but semantically different (e.g., a film and a biography of its director) are more likely to be over-merged. A type hierarchy also gives downstream retrieval a coarser fallback unit when an exact entity or relation match is missed.
+Recent work instead automates (i) directly from text with LLMs. KGGen \citep{mo2025kggen} extracts open-vocabulary triplets and merges near-duplicate entity and relation surface forms through embedding-based clustering and LLM-adjudicated verification, producing a substantially cleaner graph than raw extraction alone. However, canonicalization in KGGen and other schema-free extraction pipeline is flat, so the resulting graph has no type hierarchy and no domain/range constraints. Without types, clustering has no symbolic signal to fall back on and must rely on embedding similarity and LLM judgment alone. This raises a concrete risk: distinct entities or relations that are surface-similar but semantically different (e.g., a film and a biography of its director) are more likely to be over-merged. A type hierarchy also gives downstream retrieval a coarser fallback unit when an exact entity or relation match is missed.
 
 Extending flat canonicalization into a typed, hierarchical ontology introduces three problems that flat deduplication never has to face.
 First, type labels are themselves open-vocabulary free text, so they need the same clustering-plus-LLM-verification treatment as entities and relations. But naively merging similar type labels tends to conflate a general category with its own specializations, for example \emph{film} and \emph{documentary film}: the two look embedding-similar even though one is strictly more specific than the other.
@@ -194,7 +194,7 @@ At first, a schema-free LLM extractor  (\S\ref{sec:extraction}) produces a colle
 \begin{equation}
 \mathcal{G} = (s, t_s, r, o, t_o, Q),
 \end{equation}
-where $s$, -- subject entity, $t_s$ -- subject type, $r$ -- relation predicate, $o$ -- object entity, $t_o$ -- object type, $Q$ -- an optional list of qualifiers extracted from texts. Then $\mathcal{G}$ is passed further for canonization and typing. Every downstream stage resolves fields into canonical identifiers, keeping each stage's data dependencies explicit and independently inspectable.
+where $s$, -- subject entity, $t_s$ -- subject type, $r$ -- relation predicate, $o$ -- object entity, $t_o$ -- object type, $Q$ -- an optional list of qualifiers extracted from texts~\citep{chepurova2026wikontic}. Then $\mathcal{G}$ is passed further for canonization and typing. Every downstream stage resolves fields into canonical identifiers, keeping each stage's data dependencies explicit and independently inspectable.
 
 The pipeline runs ordered stages, described in
 \S\ref{sec:relation-dedup}--\S\ref{sec:constraints}: \emph{(1) relation
@@ -205,7 +205,7 @@ domain/range constraint induction}. The ordering is dictated by data
 dependencies. Entity-type canonicalization is conditioned on the canonical relation vocabulary as a disambiguating signal. Entity deduplication runs after the type hierarchy because it uses the hierarchy as a symbolic gate for candidate synonyms. Constraint induction derives relation constraints directly from the extracted triplets and the outputs of the first two stages.
 
 \label{sec:reoccurring-design}
-The following design choices reoccur across stages. (1) Deduplication of synonymous surface forms is performed by clustering Contriever sentence embeddings \citep{izacard2022contriever} with HDBSCAN \citep{campello2013hdbscan} at a stage-specific cosine-similarity threshold $\theta$, and every merge/split decision is adjudicated by a single LLM call per candidate cluster. (2) Merging is never a single pass: each round re-embeds the current pool -- already-merged canonical items together with untouched singletons -- re-clusters it, and sends multi-member clusters to the LLM for verification, folding accepted merges back into the pool for the next round. Rounds stop once one produces no further reduction in pool size, or a fixed round cap $R$ is reached. This catches merges a single pass would miss, e.g.\ two abbreviated name variants merging into a full form that then turns out to be a closer match to a fourth surface form than either original variant was. (3) The result of each stage is checkpointed once it completes, allowing independent inspection of every stage's output and reuse in follow-up experiments. Every $\theta$ and $R$ instance below is stage-specific (relation, type, and entity deduplication each set their own); concrete values for these and every other hyperparameter introduced in \S\ref{sec:relation-dedup}--\S\ref{sec:constraints} are collected in Table~\ref{tab:hyperparams} (Appendix~\ref{sec:appendix-hyperparams}).
+The following design choices reoccur across stages. (1) Deduplication of synonymous surface forms is performed by clustering Contriever sentence embeddings \citep{izacard2022contriever} with HDBSCAN \citep{campello2013hdbscan} at a stage-specific cosine-similarity threshold $\theta$, and every merge/split decision is adjudicated by a single LLM call per candidate cluster. (2) Merging is done through several rounds: each round re-embeds the current pool, re-clusters it, and sends multi-member clusters to the LLM for verification, folding accepted merges back into the pool for the next round. Rounds stop once one produces no further reduction in pool size, or a fixed round cap $R$ is reached. (3) The result of each stage is checkpointed once it completes, allowing independent inspection of every stage's output and reuse in follow-up experiments. Every $\theta$ and $R$ instance below is stage-specific (relation, type, and entity deduplication each set their own); concrete values for these and every other hyperparameter introduced in \S\ref{sec:relation-dedup}--\S\ref{sec:constraints} are collected in Table~\ref{tab:hyperparams} (Appendix~\ref{sec:appendix-hyperparams}).
 
 \subsection{Initial Typed Triplet Extraction}
 \label{sec:extraction}
@@ -229,7 +229,7 @@ $\mathcal{T}^*$ and organizes $\mathcal{T}^*$ into a taxonomy hierarchy $\mathca
 \subsubsection{Type canonicalization}
 
 Candidate clusters over raw type labels are generated the same way as for
-relations (\S\ref{sec:relation-dedup}, threshold $\theta_t$), but with one additional source of evidence: each candidate label shown to the LLM verifier is annotated with the top $k_{\text{ctx}}$ canonical relations it most often co-occurs with (a PPMI-weighted relation-argument profile), giving the verifier concrete distributional evidence beyond the bare label string. This context is descriptive only -- it informs the LLM's merge/split call but never merges clusters on its own; a relation-argument-profile signal is instead used to structurally order, not pre-merge, candidates during hierarchy induction (\S\ref{sec:hierarchy-induction}).
+relations (\S\ref{sec:relation-dedup}, threshold $\theta_t$), but with one additional source of evidence: each candidate label shown to the LLM verifier is annotated with the top $k_{\text{ctx}}$ canonical relations it most often co-occurs with (a PPMI-weighted relation-argument profile), giving the verifier concrete distributional evidence beyond the bare label string.
 
 The verification prompt additionally enforces a hyponymy (``kind of'') test: two labels are merged only if neither is a hyponym of the other, even when their relation-argument profiles overlap almost entirely. For example, \ \emph{documentary film} and \emph{film} participate in the same relations, but LLM instructed to keep them distinct, whereas \emph{movie} and \emph{film}, true synonyms, should
 be merged. The full prompt is given in Listing~\ref{lst:cluster-entity-types}. As in relation deduplication, this embed-cluster-verify cycle repeats for up to $R_t$ rounds until a round adds no further reduction to $\mathcal{T}^*$.
@@ -239,8 +239,7 @@ be merged. The full prompt is given in Listing~\ref{lst:cluster-entity-types}. A
 
 Flat canonicalization removes surface redundancy but does not recover
 subsumption structure. A typed knowledge graph needs an explicit is-a hierarchy over $\mathcal{T}^*$, both to gate candidate pairs during entity deduplication (\S\ref{sec:entity-dedup}) and to generalize sparse domain/range observations during constraint induction (\S\ref{sec:constraints}). We induce this hierarchy with a single
-priority-ordered, top-down, pairwise placement procedure, summarized in
-Figure~\ref{fig:hierarchy-process} and described in full below.
+priority-ordered, top-down, pairwise placement procedure:
 
 \paragraph{Priority queue.} Every canonical type in $\mathcal{T}^*$ is
 represented by a relation-argument profile, PPMI-weighted by default. A
@@ -261,11 +260,12 @@ also exhibits:
 F(v)} w_v(f),
 \end{equation}
 and $F(v)$ is the set of relation-argument features with nonzero
-weight under $v$, and $\tau$ is a fixed containment threshold (Table~\ref{tab:hyperparams}). The in-degree is a structural breadth signal, not a semantic judgment: types are grouped into priority bands from highest in-degree to lowest to identify high-level ontology concept first, where two types within $\delta$ in-degree units of each other (the \emph{priority-band tolerance}) share a band rather than being strictly ordered. If a set of external seed labels is supplied, each is matched to
-$\mathcal{T}^*$ by normalized label (or synthesized fresh if unmatched) and pinned at the top of the queue as a root candidates with no other node can be a parent of which; without seeds, the top band of the same ranking performs root discovery instead.
+weight under $v$, and $\tau$ is a fixed containment threshold (Table~\ref{tab:hyperparams}). The in-degree is a structural breadth signal: types are grouped into priority batches from highest in-degree to lowest to identify high-level ontology concepts first.
+% If a set of external seed labels is supplied, each is matched to
+% $\mathcal{T}^*$ by normalized label (or synthesized fresh if unmatched) and pinned at the top of the queue as a root candidates with no other node can be a parent of which; without seeds, the top band of the same ranking performs root discovery instead.
 
 \paragraph{Per-node placement.} Each node is routed top-down through
-whatever higher-priority bands have already placed: at every level, the
+whatever higher-priority batches have already placed: at every level, the
 remaining candidates (initially the whole pool; during descent, an
 already-placed node's existing children) are shown to the LLM in
 similarity-ranked batches of size $B$ (the \emph{candidate batch size}; Listing~\ref{lst:hierarchy-pairwise}), and a response of ``none of these'' escalates to the next, less-similar batch, up to $E$ escalation batches (the \emph{escalation cap}). Every
@@ -287,17 +287,17 @@ batch response is one of five outcomes:
   and the matched candidate are attached beneath it; the new parent re-enters
   the pool to be placed by a later band, the same as any other node.
   \item \textbf{none} of the candidates fit at any escalation batch: the
-  node settles at its current position -- as a new root if this occurred at
+  node settles at its current position, as a new root if this occurred at
   the top level, or as an ordinary child of its current descent anchor
   otherwise.
 \end{itemize}
 
-Figure~\ref{fig:hierarchy-steps} works through all five outcomes on a small film-domain vocabulary, one placement decision per panel, including the retroactive correction that panel (d) is built around.
+Figure~\ref{fig:hierarchy-steps} works through all five outcomes on a small film-domain vocabulary, one placement decision per step.
 
 \begin{figure*}[t]
 \centering
 \includegraphics[width=\textwidth]{hierarchy_induction.pdf}
-\caption{Hierarchy induction on a seven-type film-domain vocabulary, one placement decision per panel; panel colors match the outcome color-coding of Figure~\ref{fig:hierarchy-process}. (a) The initial priority ranking: \emph{documentary film} outranks \emph{film} by raw in-degree, a realistic instance of the sparsity-driven mis-tiering \S\ref{sec:hierarchy-induction} flags as a known risk. (b)-(c) The first two nodes settle via \textbf{none}, with \emph{documentary film} attached directly under \emph{audiovisual work} -- too shallow, since \emph{film} does not exist yet. (d) Once \emph{film} is placed, it judges itself \textbf{parent of} \emph{documentary film}: the earlier edge is removed and \emph{documentary film} is reattached beneath \emph{film}, the mechanism that lets a later, more specific node correct an earlier too-shallow attachment rather than only ever preventing it going forward. (e) \emph{movie} merges into \emph{film} as a \textbf{synonym}. (f) \emph{war film} settles under \emph{film} via \textbf{none}. (g) \emph{action film} is judged \textbf{same class} as \emph{war film}: a new shared parent, \emph{genre film}, is synthesized, and \emph{war film}'s edge moves from \emph{film} to it. (h) \emph{biographical film} settles under \emph{documentary film}, giving the final tree.}
+\caption{Hierarchy induction on a film-domain vocabulary, one placement decision per step. (a) The initial priority ranking; (b)-(c) The first two nodes settle with \emph{documentary film} attached directly under \emph{audiovisual work} -- too shallow, since \emph{film} does not exist yet. (d) Once \emph{film} is placed, it judges itself \textbf{parent of} \emph{documentary film}: the earlier edge is removed and \emph{documentary film} is reattached beneath \emph{film}; (e) \emph{movie} merges into \emph{film} as a \textbf{synonym}. (f) \emph{war film} settles under \emph{film} \textbf{as a child}; (g) \emph{action film} is judged \textbf{same class} as \emph{war film}: a new shared parent, \emph{genre film}, is synthesized, and \emph{war film}'s edge moves from \emph{film} to it; (h) \emph{biographical film} settles under \emph{documentary film}, giving the final tree.}
 \label{fig:hierarchy-steps}
 \end{figure*}
 
@@ -315,9 +315,9 @@ that homonymous names typed differently (e.g.\ \emph{Paris} the city versus
 Before embedding-based comparison, candidate pairs are restricted by a symbolic gate: two mentions are only ever compared if they share
 literally the same type, or are siblings under the same parent
 in the induced type hierarchy (\S\ref{sec:hierarchy-induction}). HDBSCAN call only ever compares candidates within one sibling
-group: two mentions in different partitions could never have merged under the gate regardless of embedding proximity.
+group.
 
-Within each partition, merging then follows the round-based procedure common to every deduplication stage (\S\ref{sec:reoccurring-design}, Listing~\ref{lst:cluster-entity-names}), applied independently per partition rather than once over the whole entity vocabulary: candidates are clustered at similarity threshold $\theta_e$, and each partition's embed-cluster-verify cycle repeats for up to $R_e$ rounds.
+Within each partition, merging then follows the round-based procedure common to every deduplication stage (\S\ref{sec:reoccurring-design}, Listing~\ref{lst:cluster-entity-names}), applied independently per partition. Candidates are clustered at similarity threshold $\theta_e$, and each partition's embed-cluster-verify cycle repeats for up to $R_e$ rounds.
 
 \subsection{Constraints Construction}
 \label{sec:constraints}
@@ -331,20 +331,10 @@ canonical vocabularies produced by \S\ref{sec:relation-dedup} and
 canonicalization merges surface forms without regard to grammatical role
 (\S\ref{sec:relation-dedup}), a canonical relation can silently pool a
 predicate together with its grammatical inverse (e.g.\ \emph{directed} and
-\emph{was directed by}), which would otherwise fragment one well-typed
-relation's domain/range support across two competing, individually weak
-orientations. 
-
-% Subject/object type overlap cannot by itself distinguish this
-% case from a genuinely order-free relation with identical domain and range
-% types, since both situations produce the same marginal type statistics;
-% direction is instead resolved from the signal that actually carries it, the literal surface form. 
-
-For every canonical relation with more than one
+\emph{was directed by}). Hence, for every canonical relation with more than one
 surface form, a single LLM call classifies each surface form against the
 canonical label as \emph{forward} or \emph{inverted} (Listing~\ref{lst:relation-direction}); triplets whose
-original predicate was classified inverted have their subject and object
-types swapped before the next stage.
+original predicate was classified as inverted have their subject and object types swapped before the next stage.
 
 \paragraph{Stage 2: hierarchy generalization.} For each canonical
 relation's domain (subject-role types) and range (object-role types),
@@ -378,89 +368,67 @@ below $\tau_{\text{hint}}$ (values in Table~\ref{tab:hyperparams}).
 \label{sec:evaluation}
 
 \subsection{Ontology evaluation}
+\label{sec:onto-eval}
 \textbf{Benchmark}. We evaluate OntoDisco on \textbf{Text2KGBench}
 \citep{mihindukulasooriya2023text2kgbench}, a benchmark of sentence--triple
 pairs annotated against small, hand-curated domain ontologies, comprising
 two subsets: \textbf{Wikidata-TekGen} (10 domain ontologies) and
 \textbf{DBpedia-WebNLG} (19 domain ontologies). Each domain ontology
 defines a set of classes and object properties, every property carrying a
-declared domain and range class. Several Wikidata-TekGen ontologies
-additionally encode a class hierarchy via \texttt{rdfs:subClassOf}, whereas
-the DBpedia-WebNLG ontologies did not. Every test sentence is
-paired with a gold triple set $\{(s, r, o)\}$ drawn from the ontology's
-relation vocabulary. Gold triples carry no per-triple type annotation, so a
-relation's declared domain/range class stands in for the type of every
-argument observed in that role. We use the \texttt{test}/\texttt{ground\_truth} split exclusively with 4{,}062 sentences across the 10 Wikidata-TekGen
+declared domain and range class. Every test sentence is
+paired with a gold triple set $\{(s, r, o)\}$, where r is drawn from the ontology's
+relation vocabulary. Gold triplets carry no per-triple type annotation, so a relation's declared domain/range class stands in for the type of subject/object. We use the \texttt{test} split with 4{,}062 sentences across the 10 Wikidata-TekGen
 ontologies and 2{,}014 across the 19 DBpedia-WebNLG ontologies.
 
-Text2KGBench's intended task is \emph{ontology-guided} generation: a
-system is given the ontology and must emit compliant triples. We invert
-this: OntoDisco is schema-free and receives no ontology as input; the
-benchmark's gold ontology and gold triples serve only as a post-hoc
-reference against which the pipeline's own induced schema and extracted
-triples are scored.
+% Several Wikidata-TekGen ontologies
+% additionally encode a class hierarchy via \texttt{rdfs:subClassOf}, whereas
+% the DBpedia-WebNLG ontologies did not.
+
+Text2KGBench's intended task is \emph{ontology-guided} generation: a system is given the ontology and must extract compliant triplets. We consider the inverse setting: OntoDisco is schema-free and receives no ontology as input. Instead, it must induce a schema and extract triplets from the text. We then compare the induced schema and extracted triplets against the benchmark's gold ontology and gold triplets.
 
 We used two LLM backbones driving every stage of the pipeline: Qwen3-Next-80B-A3B-Instruct
-\citep{qwen2025qwen3} and gpt-oss-120b \citep{openai2025gptoss}, both run with the identical pipeline hyperparameters listed in Table~\ref{tab:hyperparams} (Appendix~\ref{sec:appendix-hyperparams}). We run
-two conditions per benchmark subset:
+\citep{qwen2025qwen3} and gpt-oss-120b \citep{openai2025gptoss}, both run with the identical pipeline hyperparameters listed in Table~\ref{tab:hyperparams} (Appendix~\ref{sec:appendix-hyperparams}). Judging is performed in every condition by a fixed model, GPT-4o
+\citep{openai2024gpt4o}, independent of whichever backbone built the KG. 
 
-\begin{description}
-  \item[\textsc{Separate}] one pipeline run per ontology domain, yielding
-  an independent $\mathcal{R}^*$, $\mathcal{T}^*$, and hierarchy for that
-  domain alone.
-  \item[\textsc{Combined}] one pipeline run over the pooled sentences of
-  every domain in the subset, yielding a single $\mathcal{R}^*$,
-  $\mathcal{T}^*$, and hierarchy shared across all of them.
-\end{description}
+% We run
+% two conditions per benchmark subset:
 
-The \textsc{Combined} condition tests whether schema-free discovery
-separates unrelated domains into distinct regions of one induced hierarchy
-on its own, rather than only ever being evaluated one domain at a time.
-Judging is performed in every condition by a fixed model, GPT-4o
-\citep{openai2024gpt4o}, independent of whichever backbone built the KG.
+% \begin{description}
+%   \item[\textsc{Separate}] one pipeline run per ontology domain, yielding
+%   an independent $\mathcal{R}^*$, $\mathcal{T}^*$, and hierarchy for that
+%   domain alone.
+%   \item[\textsc{Combined}] one pipeline run over the pooled sentences of
+%   every domain in the subset, yielding a single $\mathcal{R}^*$,
+%   $\mathcal{T}^*$, and hierarchy shared across all of them.
+% \end{description}
 
-\textbf{Triplet matching}. For every gold triple, we retrieve the extracted triples OntoDisco produced from the same sentence and ask an LLM judge to select, if any, the one that expresses the same real-world fact as the gold triple, allowing for paraphrased relation wording and for subject and object being swapped (a grammatical inverse of the gold triple, e.g.\ \emph{X composed Y} vs.\ \emph{Y was composed by X}). The judge returns a matched index with direction \emph{same}, a matched index with direction \emph{inverse}, or no match. A matched extracted triple is removed from that sentence's candidate pool before the next gold triple is judged, so no single extraction can satisfy two gold triples.
+% The \textsc{Combined} condition tests whether schema-free discovery
+% separates unrelated domains into distinct regions of one induced hierarchy
+% on its own, rather than only ever being evaluated one domain at a time.
 
-Gold triples are matched in this direction -- from the reference side
-outward -- specifically so that an \emph{unmatched extracted triple} is
-never scored as a false positive: Text2KGBench's ontologies cover a
-curated relation vocabulary of roughly 15--20 relations per domain, and a
-schema-free pipeline may correctly extract true facts the gold ontology
-simply does not encode. Such leftover extractions are reported as an
-\emph{extra rate}, separate from recall.
 
-\textbf{{Domain/Range Type Matching}}. For every matched pair, we compare the type OntoDisco assigned to the
-extracted triple's subject and object against the gold relation's
-declared domain and range class (swapped when the match direction is
-\emph{inverse}). A second LLM judge classifies each side as \textsc{Exact}
-(synonymous types), \textsc{More General} (OntoDisco's type is a broader
-category subsuming the gold type), \textsc{More Narrow} (OntoDisco's type
-is a subtype of the gold type), or \textsc{Not Related}. We report this
-four-way judgment as a distribution rather than collapsing it to a single
-accuracy figure: \textsc{More General} and \textsc{More Narrow} are
-distinct failure modes of hierarchy induction -- over-flattening versus
-over-fragmentation -- worth distinguishing rather than conflating into one
-error rate.
+\textbf{Triplet matching}. For every gold triple, we retrieve the extracted triplets OntoDisco produced from the same sentence and ask an LLM judge to select, if any, the one that expresses the same real-world fact as the gold triple, allowing for paraphrased relation wording and for subject and object being swapped (a grammatical inverse of the gold triple, e.g.\ \emph{X composed Y} vs.\ \emph{Y was composed by X}). The judge returns a matched index with direction \emph{same}, a matched index with direction \emph{inverse}, or no match. A matched extracted triple is removed from that sentence's candidate pool before the next gold triple is judged, so no single extraction can satisfy two gold triples.
 
-\paragraph{Recall} is the proportion of gold triples matched, excluding
-any triple whose judge call failed outright (\S\ref{sec:eval-reliability}).
+Gold triples are matched from the reference side outward, specifically so that an \emph{unmatched extracted triple} is never scored as a false positive. Text2KGBench uses curated relation vocabularies of roughly 15--20 relations per domain, while a schema-free pipeline may correctly extract true facts that are simply not encoded in the gold ontology. We therefore report the \emph{recall}, defined as the proportion of gold triples that are matched, and the \emph{extra rate}, defined as the proportion of extracted triples that remain unmatched after all gold triples have been processed. The extra rate is reported separately from recall to distinguish facts extracted beyond the gold annotations from failures to recover reference triples. We also report the \emph{direction breakdown}: the proportion of matched triples classified as \emph{same} versus \emph{inverse}. This provides an indirect check of OntoDisco's relation-direction resolution
+.
 
-\paragraph{Direction breakdown} reports the proportion of matches
-classified \emph{same} versus \emph{inverse}, doubling as an indirect
-check on the pipeline's own relation-direction resolution
-(\S\ref{sec:constraints}, Stage~1).
+\textbf{{Domain/Range Type Matching}}. For every matched pair, we compare the types that OntoDisco assigned to the extracted triple's subject and object with the gold relation's declared domain and range classes. The domain and range are swapped when the match direction is \emph{inverse}. A second LLM judge classifies each side as \textsc{Exact} (synonymous types), \textsc{More General} (OntoDisco's type is a broader category that subsumes the gold type), \textsc{More Narrow} (OntoDisco's type is a subtype of the gold type), or \textsc{Not Related}. We report the resulting \emph{type-judgment distribution} over matched pairs, with domain and range sides considered independently. This distinction is important because \textsc{More General} and \textsc{More Narrow} represent different failure modes of hierarchy induction: over-flattening versus over-fragmentation.
+% any triple whose judge call failed outright (\S\ref{sec:eval-reliability}).
 
-\paragraph{Extra rate} is the proportion of extracted triples per sentence
-left unmatched after every gold triple has been processed, reported separately from recall.
+% \paragraph{Direction breakdown} reports the proportion of matches
+% classified \emph{same} versus \emph{inverse}, doubling as an indirect
+% check on the pipeline's own relation-direction resolution
+% (\S\ref{sec:constraints}, Stage~1).
 
-\paragraph{Type-judgment distribution} reports, over matched pairs only,
-the counts of \textsc{Exact}/\textsc{More General}/\textsc{More
-Narrow}/\textsc{Not Related} for the domain and range sides independently.
+% \paragraph{Extra rate} is the proportion of extracted triplets per sentence
+% left unmatched after every gold triple has been processed, reported separately from recall.
 
-Every metric is reported both pooled over a benchmark subset and per
-domain, so a \textsc{Combined} run's per-domain breakdown is directly
-comparable to the corresponding \textsc{Separate} run for that same
-domain.
+% \paragraph{Type-judgment distribution} reports, over matched pairs only,
+% the counts of \textsc{Exact}/\textsc{More General}/\textsc{More
+% Narrow}/\textsc{Not Related} for the domain and range sides independently.
+
+% Every metric is reported both pooled over a benchmark subset and per
+% domain.
 
 % \subsection{Judging Reliability}
 % \label{sec:eval-reliability}
@@ -471,56 +439,56 @@ domain.
 % as a separate failure count, with an explicit warning when failures make
 % up a large fraction of a run.
 
-\subsection{Downstream QA Evaluation on MuSiQue}
-\label{sec:eval-qa}
+% \subsection{Downstream QA Evaluation on MuSiQue}
+% \label{sec:eval-qa}
 
-The Text2KGBench evaluation above (\S\ref{sec:evaluation})
-is \emph{intrinsic}: it scores extracted triples and induced types directly against a gold ontology, independent of any downstream use. It does not test the claim motivating OntoDisco in the first place
-(\S\ref{sec:introduction}): that a typed, hierarchically organized KG
-supports graph-based retrieval better than a flat one. We complement it
-with an \emph{extrinsic} evaluation on multi-hop question answering, where
-the KG is used, not just scored.
+% The Text2KGBench evaluation above (\S\ref{sec:evaluation})
+% is \emph{intrinsic}: it scores extracted triplets and induced types directly against a gold ontology, independent of any downstream use. It does not test the claim motivating OntoDisco in the first place
+% (\S\ref{sec:introduction}): that a typed, hierarchically organized KG
+% supports graph-based retrieval better than a flat one. We complement it
+% with an \emph{extrinsic} evaluation on multi-hop question answering, where
+% the KG is used, not just scored.
 
-\paragraph{Benchmark.} We use 200 instances (2--4 hop questions) from the
-MuSiQue test set \citep{trivedi2022musique}, the same instances the raw
-triplet corpus fed into the pipeline was extracted from, so this
-evaluation reuses the pipeline's own KG rather than one built for a
-different corpus. Each MuSiQue instance bundles a
-question, a gold answer with optional answer aliases, and the $\sim$20
-supporting and distractor paragraphs the question's evidence is drawn
-from.
+% \paragraph{Benchmark.} We use 200 instances (2--4 hop questions) from the
+% MuSiQue test set \citep{trivedi2022musique}, the same instances the raw
+% triplet corpus fed into the pipeline was extracted from, so this
+% evaluation reuses the pipeline's own KG rather than one built for a
+% different corpus. Each MuSiQue instance bundles a
+% question, a gold answer with optional answer aliases, and the $\sim$20
+% supporting and distractor paragraphs the question's evidence is drawn
+% from.
 
-\paragraph{Task and method.} We reuse the retrieval-and-answer procedure
-from Wikontic \citep{chepurova2026wikontic}: an LLM extracts candidate
-entity mentions from the question; each mention is linked, via
-embedding-similarity retrieval followed by a second LLM call that filters
-the retrieved shortlist for relevance, to entities in the KG; supporting
-triples are then collected by walking outward from the linked entities up
-to a fixed hop budget, only visiting entities newly reached by the
-previous hop; and a final LLM call answers the question from the
-collected triples alone. Wikontic canonicalizes entities and relations
-\emph{per instance}, so retrieval is naturally scoped to one instance's
-own small KG. OntoDisco canonicalizes \emph{across the whole corpus}
-(\S\ref{sec:methods}), so this scoping is reconstructed explicitly: every
-raw triplet is resolved to its canonical entity and relation identifiers
-via the induced vocabularies, and retrieval and hop-walking are then
-restricted to only the resolved triples originating from that question's
-own instance, before the walk ever begins.
+% \paragraph{Task and method.} We reuse the retrieval-and-answer procedure
+% from Wikontic \citep{chepurova2026wikontic}: an LLM extracts candidate
+% entity mentions from the question; each mention is linked, via
+% embedding-similarity retrieval followed by a second LLM call that filters
+% the retrieved shortlist for relevance, to entities in the KG; supporting
+% triplets are then collected by walking outward from the linked entities up
+% to a fixed hop budget, only visiting entities newly reached by the
+% previous hop; and a final LLM call answers the question from the
+% collected triplets alone. Wikontic canonicalizes entities and relations
+% \emph{per instance}, so retrieval is naturally scoped to one instance's
+% own small KG. OntoDisco canonicalizes \emph{across the whole corpus}
+% (\S\ref{sec:methods}), so this scoping is reconstructed explicitly: every
+% raw triplet is resolved to its canonical entity and relation identifiers
+% via the induced vocabularies, and retrieval and hop-walking are then
+% restricted to only the resolved triplets originating from that question's
+% own instance, before the walk ever begins.
 
-\paragraph{Metrics.} We report exact match and token-level F1 between the
-predicted answer and the gold answer, following the standard
-SQuAD/MuSiQue convention of maximizing each metric over the gold answer
-and its provided aliases, since a prediction need only match one
-acceptable reference string.
+% \paragraph{Metrics.} We report exact match and token-level F1 between the
+% predicted answer and the gold answer, following the standard
+% SQuAD/MuSiQue convention of maximizing each metric over the gold answer
+% and its provided aliases, since a prediction need only match one
+% acceptable reference string.
 
-\paragraph{Purpose.} Because the QA-answering LLM is fixed and
-independent of whichever backbone built the KG being evaluated (the same
-judge-independence design used for Text2KGBench evaluation above), a
-change in exact-match/F1 across KGs built with different extraction
-backbones or different hierarchy-induction settings (backbone,
-\texttt{max\_depth}, seed roots) isolates the effect of KG structure
-itself on downstream QA, rather than conflating it with a stronger or
-weaker answering model.
+% \paragraph{Purpose.} Because the QA-answering LLM is fixed and
+% independent of whichever backbone built the KG being evaluated (the same
+% judge-independence design used for Text2KGBench evaluation above), a
+% change in exact-match/F1 across KGs built with different extraction
+% backbones or different hierarchy-induction settings (backbone,
+% \texttt{max\_depth}, seed roots) isolates the effect of KG structure
+% itself on downstream QA, rather than conflating it with a stronger or
+% weaker answering model.
 
 % TODO: report exact-match/F1 once the full sweep across
 % output/checkpoints/run_* (varying backbone, max_depth, and seed roots)
@@ -529,7 +497,7 @@ weaker answering model.
 \subsection{Information Retention}
 \label{sec:eval-mine}
 
-\textbf{Dataset}. We complement \S\ref{sec:eval-qa} with a second extrinsic evaluation on
+\textbf{Dataset}. We complement \S\ref{sec:onto-eval} with an extrinsic evaluation on
 \textbf{MINE} \citep{mo2025kggen}, the retrieval-and-judge benchmark. 
 We use all 101 essays (topic and content) and their
 associated generated factual queries (1{,}500 in total). Every essay's triplets are extracted
@@ -541,30 +509,22 @@ essays.
 method (sentence-embedding similarity over entities
 followed by a fixed-depth graph walk, top-$k=8$), and an LLM judge is asked
 a single binary question: whether the retrieved context contains the
-information stated in the query.
-
-\textbf{Metrics.} We report \emph{overall accuracy}: the fraction of the
+information stated in the query. We report \emph{overall accuracy}: the fraction of the
 1{,}500 queries the judge scores as supported by their retrieved context,
 both pooled over the whole benchmark and broken down per essay.
 
-\textbf{Results.} Table~\ref{tab:mine} reports overall accuracy for two
-extraction backbones, both with qualifiers folded into the retrieved
-context (\S\ref{sec:methods}): gpt-oss-120b reaches 73.93\% (1{,}109/1{,}500),
-judged independently by GPT-4o; gpt-4o itself reaches 62.53\%
-(938/1{,}500). Unlike the Text2KGBench evaluation above, the gpt-4o row is
-\emph{not} judged independently of its own construction backbone -- GPT-4o
-is both the KG-building model and the judge for that row, since MINE's
-judge is fixed to GPT-4o throughout. We found gpt-4o's lower score traces
-to extraction, not to canonicalization or retrieval: on this corpus
-gpt-4o's single-call extraction consistently yields markedly fewer raw
-triplets per document than gpt-oss-120b's under an identical prompt (a
-gap we confirmed holds across multiple gpt-4o access paths and is not an
-artifact of chunking, parsing, or truncation), leaving a sparser KG for
-the same retrieval procedure to draw on. As a hierarchy-depth ablation on
-the gpt-oss-120b backbone, capping \texttt{max\_depth} at 10 (the deepest
-level any node actually reached in the uncapped run) changes accuracy by
-less than half a point (74.33\% vs.\ 73.93\%), confirming the cap was
-never binding.
+% \textbf{Results.} Table~\ref{tab:mine} reports overall accuracy: gpt-oss-120b reaches 73.93\% (1{,}109/1{,}500),
+% judged independently by GPT-4o; gpt-4o itself reaches 62.53\%
+% (938/1{,}500). Unlike the Text2KGBench evaluation above, the gpt-4o row is
+% \emph{not} judged independently of its own construction backbone -- GPT-4o
+% is both the KG-building model and the judge for that row, since MINE's
+% judge is fixed to GPT-4o throughout. We found gpt-4o's lower score traces
+% to extraction, not to canonicalization or retrieval: on this corpus
+% gpt-4o's single-call extraction consistently yields markedly fewer raw
+% triplets per document than gpt-oss-120b's under an identical prompt (a
+% gap we confirmed holds across multiple gpt-4o access paths and is not an
+% artifact of chunking, parsing, or truncation), leaving a sparser KG for
+% the same retrieval procedure to draw on.
 
 \begin{table}[t]
 \centering
@@ -589,14 +549,6 @@ any node reached under the uncapped/50 setting.}
 
 \section{Results}
 \label{sec:results}
-
-We report results on the Wikidata-TekGen subset of Text2KGBench
-(\S\ref{sec:evaluation}) under the \textsc{Separate} condition, for both
-backbones, and on the DBpedia-WebNLG subset under the \textsc{Separate}
-condition for gpt-oss-120b. Results for the \textsc{Combined} condition,
-and for Qwen3-Next-80B on DBpedia-WebNLG, are still being collected at
-submission time and are left for the camera-ready version.
-
 \subsection{Text2KGBench}
 \label{sec:results-text2kgbench}
 
@@ -609,7 +561,7 @@ judged by an independent GPT-4o groundedness check
 are drawn from mid-article Wikipedia text without their source article's
 topic, so a substantial fraction of gold subjects are established only
 anaphorically, outside what the pipeline is actually shown. For reference,
-recall computed over the full, unfiltered set of gold triples -- 45.7\%
+recall computed over the full, unfiltered set of gold triplets -- 45.7\%
 (Qwen3-Next-80B) and 46.1\% (gpt-oss-120b) -- is already comparable to, or
 roughly 0.1 points above, the best baseline (Vicuna-13B, recall 0.34)
 reported in the original Text2KGBench study on this same subset
@@ -797,11 +749,11 @@ $\tau_{\text{hint}}$ & HINT confidence threshold (discard below) & 0.20 \\
 \section{Sentence Groundedness Analysis}
 \label{sec:appendix-groundedness}
 
-Text2KGBench's Wikidata-TekGen sentences are drawn from mid-article Wikipedia text without their source article's title or topic, while its gold triples are annotated against the full article. The underlying corpus's own construction methodology \citep{agarwal2021tekgen} aligns a Wikidata triple to a sentence by requiring only the \emph{object} entity's alias to occur in it; when the \emph{subject} is absent, a single third-person pronoun is substituted with the subject's canonical name -- but this does not cover zero-anaphora (topic continuity with no pronoun to replace at all), which is the pattern we observe empirically in most cases. This class of noise is well documented for distant supervision in relation extraction generally \citep{mintz2009distant, riedel2010modeling}, and DocRED \citep{yao2019docred} reports an analogous statistic built to motivate the opposite fix (document-level rather than sentence-level extraction): at least 40.7\% of its relational facts require reading multiple sentences. To our knowledge this has not been previously quantified specifically for Text2KGBench, though it is consistent with the known limitations of the distant-supervision alignment its underlying corpus uses.
+Text2KGBench's Wikidata-TekGen sentences are drawn from mid-article Wikipedia text without their source article's title or topic, while its gold triplets are annotated against the full article. The underlying corpus's own construction methodology \citep{agarwal2021tekgen} aligns a Wikidata triple to a sentence by requiring only the \emph{object} entity's alias to occur in it; when the \emph{subject} is absent, a single third-person pronoun is substituted with the subject's canonical name -- but this does not cover zero-anaphora (topic continuity with no pronoun to replace at all), which is the pattern we observe empirically in most cases. This class of noise is well documented for distant supervision in relation extraction generally \citep{mintz2009distant, riedel2010modeling}, and DocRED \citep{yao2019docred} reports an analogous statistic built to motivate the opposite fix (document-level rather than sentence-level extraction): at least 40.7\% of its relational facts require reading multiple sentences. To our knowledge this has not been previously quantified specifically for Text2KGBench, though it is consistent with the known limitations of the distant-supervision alignment its underlying corpus uses.
 
-We use an additional GPT-4o judge to classify, per gold triple, whether its sentence alone -- no outside knowledge, no article context -- actually supports it: the subject must be identifiable within the sentence (allowing name-form variation, e.g. ``Charles Spurgeon Johnson'' in the sentence vs.\ ``Charles S. Johnson'' in the reference still counts as grounded), and the object and relationship must actually be stated or implied. Recall in \S\ref{sec:results-text2kgbench} is reported with flagged (ungrounded) triples excluded from the denominator, as a post-filter over the already-collected judge results requiring no re-extraction or re-matching.
+We use an additional GPT-4o judge to classify, per gold triple, whether its sentence alone -- no outside knowledge, no article context -- actually supports it: the subject must be identifiable within the sentence (allowing name-form variation, e.g. ``Charles Spurgeon Johnson'' in the sentence vs.\ ``Charles S. Johnson'' in the reference still counts as grounded), and the object and relationship must actually be stated or implied. Recall in \S\ref{sec:results-text2kgbench} is reported with flagged (ungrounded) triplets excluded from the denominator, as a post-filter over the already-collected judge results requiring no re-extraction or re-matching.
 
-Table~\ref{tab:text2kgbench-grounded} reports recall before and after this filter, per domain (Qwen3-Next-80B): pooled across Wikidata-TekGen, 48.8\% of gold triples are flagged ungrounded. Table~\ref{tab:text2kgbench-grounded-split} makes the comparison more direct -- recall computed \emph{separately} over the grounded and the ungrounded subsets, pooled across all ten domains, for both backbones. Recall on grounded triples is more than three times that on ungrounded ones for both models, evidence the classification tracks something real rather than adding noise on top of noise: a triple the judge calls grounded is recovered at roughly the rate the pipeline's own extraction and matching quality would predict, while an ungrounded one is only matched when the extractor happens to supply outside knowledge the sentence alone did not license.
+Table~\ref{tab:text2kgbench-grounded} reports recall before and after this filter, per domain (Qwen3-Next-80B): pooled across Wikidata-TekGen, 48.8\% of gold triplets are flagged ungrounded. Table~\ref{tab:text2kgbench-grounded-split} makes the comparison more direct -- recall computed \emph{separately} over the grounded and the ungrounded subsets, pooled across all ten domains, for both backbones. Recall on grounded triplets is more than three times that on ungrounded ones for both models, evidence the classification tracks something real rather than adding noise on top of noise: a triple the judge calls grounded is recovered at roughly the rate the pipeline's own extraction and matching quality would predict, while an ungrounded one is only matched when the extractor happens to supply outside knowledge the sentence alone did not license.
 
 \begin{table}[t]
 \centering
@@ -827,7 +779,7 @@ Pooled & 45.7 & 69.1 & 48.8 \\
 \bottomrule
 \end{tabular}%
 }
-\caption{Recall (\%) before and after excluding gold triples an independent GPT-4o judge flags as not grounded in their own sentence, and the pooled fraction of gold triples so flagged (Qwen3-Next-80B, Wikidata-TekGen, \textsc{Separate} condition). The pooled ungrounded rate (48.8\%) differs from the per-domain average because it is computed over triples, not domains.}
+\caption{Recall (\%) before and after excluding gold triplets an independent GPT-4o judge flags as not grounded in their own sentence, and the pooled fraction of gold triplets so flagged (Qwen3-Next-80B, Wikidata-TekGen, \textsc{Separate} condition). The pooled ungrounded rate (48.8\%) differs from the per-domain average because it is computed over triplets, not domains.}
 \label{tab:text2kgbench-grounded}
 \end{table}
 
@@ -842,7 +794,7 @@ Qwen3-Next-80B & 69.1 & 21.1 \\
 gpt-oss-120b   & 70.3 & 20.8 \\
 \bottomrule
 \end{tabular}
-\caption{Recall (\%) computed separately over the grounded and ungrounded gold-triple subsets, pooled across all ten Wikidata-TekGen domains, \textsc{Separate} condition ($n=3{,}705$ grounded / $3{,}527$ ungrounded triples, both models).}
+\caption{Recall (\%) computed separately over the grounded and ungrounded gold-triple subsets, pooled across all ten Wikidata-TekGen domains, \textsc{Separate} condition ($n=3{,}705$ grounded / $3{,}527$ ungrounded triplets, both models).}
 \label{tab:text2kgbench-grounded-split}
 \end{table}
 
