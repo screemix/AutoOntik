@@ -691,7 +691,7 @@ $\tau$ & Weeds-precision containment threshold & 0.75 \\
 $\delta$ & Priority-band tolerance (in-degree units) & 10 \\
 $B$ & Candidate batch size & 30 \\
 $E$ & Escalation-batch cap & 3 \\
-$D_{\max}$ & Maximum placement depth & 50\textsuperscript{$\dagger$} \\
+$D_{\max}$ & Maximum placement depth & 50 \\
 -- & Relation-argument weighting scheme & PPMI \\
 \addlinespace
 \multicolumn{3}{l}{\textit{Entity deduplication (\S\ref{sec:entity-dedup})}} \\
@@ -710,7 +710,7 @@ $\tau_{\text{hint}}$ & HINT confidence threshold (discard below) & 0.20 \\
 -- & Parallel LLM-verification workers & 8 \\
 \bottomrule
 \end{tabular}
-\caption{Pipeline hyperparameters. All HDBSCAN thresholds $\theta$ are cosine-similarity thresholds; HDBSCAN's own \texttt{cluster\_selection\_epsilon} is set to $1-\theta$. \textsuperscript{$\dagger$}Seed-hierarchy ablation runs (\S\ref{sec:hierarchy-induction}) use $D_{\max}=10$ instead of 50; every other value is unchanged across every reported configuration. The parallel-worker count affects wall-clock time only -- cluster-verification order is reassembled deterministically regardless of completion order (\S\ref{sec:reoccurring-design}).}
+\caption{Pipeline hyperparameters. All HDBSCAN thresholds $\theta$ are cosine-similarity thresholds; HDBSCAN's own \texttt{cluster\_selection\_epsilon} is set to $1-\theta$. The parallel-worker count affects wall-clock time only -- cluster-verification order is reassembled deterministically regardless of completion order (\S\ref{sec:reoccurring-design}).}
 \label{tab:hyperparams}
 \end{table*}
 
