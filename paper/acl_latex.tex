@@ -722,6 +722,62 @@ $\tau_{\text{hint}}$ & HINT confidence threshold (discard below) & 0.20 \\
 \label{tab:hyperparams}
 \end{table*}
 
+\section{Sentence Groundedness Analysis}
+\label{sec:appendix-groundedness}
+
+Text2KGBench's Wikidata-TekGen sentences are drawn from mid-article Wikipedia text without their source article's title or topic, while its gold triples are annotated against the full article. The underlying corpus's own construction methodology \citep{agarwal2021tekgen} aligns a Wikidata triple to a sentence by requiring only the \emph{object} entity's alias to occur in it; when the \emph{subject} is absent, a single third-person pronoun is substituted with the subject's canonical name -- but this does not cover zero-anaphora (topic continuity with no pronoun to replace at all), which is the pattern we observe empirically in most cases. This class of noise is well documented for distant supervision in relation extraction generally \citep{mintz2009distant, riedel2010modeling}, and DocRED \citep{yao2019docred} reports an analogous statistic built to motivate the opposite fix (document-level rather than sentence-level extraction): at least 40.7\% of its relational facts require reading multiple sentences. To our knowledge this has not been previously quantified specifically for Text2KGBench, though it is consistent with the known limitations of the distant-supervision alignment its underlying corpus uses.
+
+We use an additional GPT-4o judge to classify, per gold triple, whether its sentence alone -- no outside knowledge, no article context -- actually supports it: the subject must be identifiable within the sentence (allowing name-form variation, e.g. ``Charles Spurgeon Johnson'' in the sentence vs.\ ``Charles S. Johnson'' in the reference still counts as grounded), and the object and relationship must actually be stated or implied. Recall in \S\ref{sec:results-text2kgbench} is reported with flagged (ungrounded) triples excluded from the denominator, as a post-filter over the already-collected judge results requiring no re-extraction or re-matching.
+
+Table~\ref{tab:text2kgbench-grounded} reports recall before and after this filter, per domain (Qwen3-Next-80B): pooled across Wikidata-TekGen, 48.8\% of gold triples are flagged ungrounded. Table~\ref{tab:text2kgbench-grounded-split} makes the comparison more direct -- recall computed \emph{separately} over the grounded and the ungrounded subsets, pooled across all ten domains, for both backbones. Recall on grounded triples is more than three times that on ungrounded ones for both models, evidence the classification tracks something real rather than adding noise on top of noise: a triple the judge calls grounded is recovered at roughly the rate the pipeline's own extraction and matching quality would predict, while an ungrounded one is only matched when the extractor happens to supply outside knowledge the sentence alone did not license.
+
+\begin{table}[t]
+\centering
+\small
+\setlength{\tabcolsep}{3pt}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lccc}
+\toprule
+Domain & Raw & Filtered & Ungr. (\%) \\
+\midrule
+ont\_1\_movie     & 42.8 & 76.9 & 62.2 \\
+ont\_2\_music     & 46.8 & 71.2 & 51.2 \\
+ont\_3\_sport     & 33.1 & 45.3 & 32.1 \\
+ont\_4\_book      & 49.8 & 73.1 & 45.8 \\
+ont\_5\_military  & 37.3 & 52.2 & 38.7 \\
+ont\_6\_computer  & 59.3 & 79.2 & 34.5 \\
+ont\_7\_space     & 70.3 & 76.8 & 13.6 \\
+ont\_8\_politics  & 67.3 & 81.8 & 29.2 \\
+ont\_9\_nature    & 38.8 & 60.9 & 48.0 \\
+ont\_10\_culture  & 35.8 & 56.6 & 69.4 \\
+\midrule
+Pooled & 45.7 & 69.1 & 48.8 \\
+\bottomrule
+\end{tabular}%
+}
+\caption{Recall (\%) before and after excluding gold triples an independent GPT-4o judge flags as not grounded in their own sentence, and the pooled fraction of gold triples so flagged (Qwen3-Next-80B, Wikidata-TekGen, \textsc{Separate} condition). The pooled ungrounded rate (48.8\%) differs from the per-domain average because it is computed over triples, not domains.}
+\label{tab:text2kgbench-grounded}
+\end{table}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lcc}
+\toprule
+Model & Recall, grounded & Recall, ungrounded \\
+\midrule
+Qwen3-Next-80B & 69.1 & 21.1 \\
+gpt-oss-120b   & 70.3 & 20.8 \\
+\bottomrule
+\end{tabular}
+\caption{Recall (\%) computed separately over the grounded and ungrounded gold-triple subsets, pooled across all ten Wikidata-TekGen domains, \textsc{Separate} condition ($n=3{,}705$ grounded / $3{,}527$ ungrounded triples, both models).}
+\label{tab:text2kgbench-grounded-split}
+\end{table}
+
+\paragraph{Examples.} \emph{Ungrounded -- subject established anaphorically, not in the sentence:} the sentence \emph{``The series depicted the Great Migration of African Americans from the rural South to the urban North.''} is paired with the gold triple (\emph{Jacob Lawrence}, \emph{ethnic group}, \emph{African Americans}); \emph{Jacob Lawrence} is the subject of the source Wikipedia article but is never named in this particular sentence, so no extractor shown only this sentence could recover the fact.
+
+\emph{Grounded -- name-form variation, not omission:} the sentence \emph{``Charles Spurgeon Johnson (July 24, 1893 -- October 27, 1956) was an American sociologist and college administrator, the first black president of historically black Fisk University, and a lifelong advocate for racial equality and the advancement of civil rights for African Americans and all ethnic minorities.''} is paired with the gold triple (\emph{Charles S. Johnson}, \emph{ethnic group}, \emph{African Americans}). The sentence names the subject in a different but recognizable form and states the object explicitly, so the judge correctly marks it grounded rather than flagging it for omission.
+
 \section{Prompt Templates}
 \label{sec:appendix-prompts}
 
