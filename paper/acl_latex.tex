@@ -547,22 +547,38 @@ information stated in the query.
 1{,}500 queries the judge scores as supported by their retrieved context,
 both pooled over the whole benchmark and broken down per essay.
 
-% \paragraph{Purpose.} Because the judge and retrieval procedure are held
-% fixed at KGGen's own settings, any difference between OntoDisco's accuracy
-% here and KGGen's reported MINE accuracy isolates the effect of OntoDisco's
-% added typing, canonicalization, and hierarchy-induction stages on
-% retrieval quality, under the exact evaluation harness KGGen itself is
-% scored with -- complementary to \S\ref{sec:eval-qa}, which instead isolates
-% the effect of KG structure under OntoDisco's own retrieval design.
+\textbf{Results.} Table~\ref{tab:mine} reports overall accuracy for two
+extraction backbones, both with qualifiers folded into the retrieved
+context (\S\ref{sec:methods}): gpt-oss-120b reaches 73.93\% (1{,}109/1{,}500),
+judged independently by GPT-4o; gpt-4o itself reaches 62.53\%
+(938/1{,}500). Unlike the Text2KGBench evaluation above, the gpt-4o row is
+\emph{not} judged independently of its own construction backbone -- GPT-4o
+is both the KG-building model and the judge for that row, since MINE's
+judge is fixed to GPT-4o throughout. We found gpt-4o's lower score traces
+to extraction, not to canonicalization or retrieval: on this corpus
+gpt-4o's single-call extraction consistently yields markedly fewer raw
+triplets per document than gpt-oss-120b's under an identical prompt (a
+gap we confirmed holds across multiple gpt-4o access paths and is not an
+artifact of chunking, parsing, or truncation), leaving a sparser KG for
+the same retrieval procedure to draw on.
 
-% TODO: report overall accuracy (pooled and per-essay) once
-% scripts/mine_benchmark/run_judge_eval.py has been re-run against the
-% corrected pipeline's output/mine/kg_graph.json -- the hierarchy induction
-% prompt bug (escaped {{ }} in hierarchy_pairwise_action.txt leaking into
-% the LLM's own output and failing JSON parsing on every "none" decision)
-% was fixed after the numbers currently in output/mine/judge_results.json
-% and output/mine/judge_results_qualifiers.json were produced, so those
-% figures predate the fix and should not be reported as-is.
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lcc}
+\toprule
+Backbone & Judge & Accuracy (\%) \\
+\midrule
+gpt-oss-120b & GPT-4o (independent) & 73.93 \\
+gpt-4o       & GPT-4o (self)        & 62.53 \\
+\bottomrule
+\end{tabular}
+\caption{MINE overall accuracy (\S\ref{sec:eval-mine}), qualifiers folded
+into retrieved context, 1{,}500 queries. The gpt-4o row is self-judged
+(judge = construction backbone); the gpt-oss-120b row is judged
+independently.}
+\label{tab:mine}
+\end{table}
 
 \section{Results}
 \label{sec:results}
