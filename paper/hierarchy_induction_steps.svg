@@ -1,0 +1,173 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 760" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="s-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9aa3ad"/></marker>
+    <marker id="s-arrow-d" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c94f7c"/></marker>
+  </defs>
+
+  <rect x="0" y="0" width="1180" height="760" fill="#ffffff"/>
+
+  <!-- ═══════════ sequencing connectors between panels ═══════════ -->
+  <line x1="290" y1="170" x2="310" y2="170" stroke="#9aa3ad" stroke-width="1.5" marker-end="url(#s-arrow)"/>
+  <line x1="580" y1="170" x2="600" y2="170" stroke="#9aa3ad" stroke-width="1.5" marker-end="url(#s-arrow)"/>
+  <line x1="870" y1="170" x2="890" y2="170" stroke="#9aa3ad" stroke-width="1.5" marker-end="url(#s-arrow)"/>
+  <path d="M1025,330 V340 H445 V350" fill="none" stroke="#9aa3ad" stroke-width="1.5" marker-end="url(#s-arrow)"/>
+  <line x1="290" y1="510" x2="310" y2="510" stroke="#9aa3ad" stroke-width="1.5" marker-end="url(#s-arrow)"/>
+  <line x1="580" y1="510" x2="600" y2="510" stroke="#9aa3ad" stroke-width="1.5" marker-end="url(#s-arrow)"/>
+  <line x1="870" y1="510" x2="890" y2="510" stroke="#9aa3ad" stroke-width="1.5" marker-end="url(#s-arrow)"/>
+
+  <!-- ═══════════ (a) Priority bands ═══════════ -->
+  <g>
+    <rect x="20" y="10" width="270" height="320" rx="9" fill="#fbfbfc" stroke="#d0d7de" stroke-width="1"/>
+    <rect x="20" y="10" width="270" height="5" rx="2.5" fill="#7c4fd1"/>
+    <text x="36" y="34" font-size="14.5" font-weight="700" fill="#1b1f24">(a) Priority bands</text>
+    <text x="36" y="62" font-size="12.5" fill="#1b1f24"><tspan font-weight="700">Band 1</tspan>  audiovisual work</text>
+    <text x="36" y="80" font-size="12.5" fill="#1b1f24"><tspan font-weight="700">Band 2</tspan>  documentary film</text>
+    <text x="36" y="98" font-size="12.5" fill="#1b1f24"><tspan font-weight="700">Band 3</tspan>  film</text>
+    <text x="36" y="116" font-size="12.5" fill="#1b1f24"><tspan font-weight="700">Band 4</tspan>  movie</text>
+    <text x="36" y="134" font-size="12.5" fill="#1b1f24"><tspan font-weight="700">Band 5</tspan>  war film,</text>
+    <text x="70" y="150" font-size="12.5" fill="#1b1f24">action film,</text>
+    <text x="70" y="166" font-size="12.5" fill="#1b1f24">biographical film</text>
+    <text x="36" y="200" font-size="11" font-style="italic" fill="#57606a">ranked by Weeds-precision in-degree,</text>
+    <text x="36" y="214" font-size="11" font-style="italic" fill="#57606a">high &#8594; low (&#964;, band tolerance &#948;).</text>
+    <text x="36" y="236" font-size="11" font-style="italic" fill="#c94f7c">documentary film outranks film here --</text>
+    <text x="36" y="250" font-size="11" font-style="italic" fill="#c94f7c">in-degree is a frequency proxy, not true</text>
+    <text x="36" y="264" font-size="11" font-style="italic" fill="#c94f7c">generality (realistic mis-tiering risk).</text>
+  </g>
+
+  <!-- ═══════════ (b) Step 1 - audiovisual work ═══════════ -->
+  <g font-family="Menlo, Consolas, 'DejaVu Sans Mono', monospace">
+    <rect x="310" y="10" width="270" height="320" rx="9" fill="#fbfbfc" stroke="#d0d7de" stroke-width="1"/>
+    <rect x="310" y="10" width="270" height="5" rx="2.5" fill="#8a97a8"/>
+    <text x="326" y="34" font-size="14.5" font-weight="700" fill="#1b1f24" font-family="Helvetica, Arial, sans-serif">(b) Step 1 -- audiovisual work</text>
+    <text x="326" y="62" font-size="13" fill="#57606a"><tspan font-weight="700" fill="#57606a">audiovisual work</tspan></text>
+    <text x="326" y="220" font-size="11" font-style="italic" fill="#57606a" font-family="Helvetica, Arial, sans-serif">pool empty &#8594; no candidates</text>
+    <text x="326" y="234" font-size="11" font-style="italic" fill="#57606a" font-family="Helvetica, Arial, sans-serif">&#8594; <tspan font-weight="700">none</tspan> &#8594; becomes a root</text>
+  </g>
+
+  <!-- ═══════════ (c) Step 2 - documentary film ═══════════ -->
+  <g font-family="Menlo, Consolas, 'DejaVu Sans Mono', monospace">
+    <rect x="600" y="10" width="270" height="320" rx="9" fill="#fbfbfc" stroke="#d0d7de" stroke-width="1"/>
+    <rect x="600" y="10" width="270" height="5" rx="2.5" fill="#8a97a8"/>
+    <text x="616" y="34" font-size="14.5" font-weight="700" fill="#1b1f24" font-family="Helvetica, Arial, sans-serif">(c) Step 2 -- documentary film</text>
+    <text x="616" y="62" font-size="13" fill="#1b1f24">audiovisual work</text>
+    <text x="616" y="79" font-size="13" fill="#1b1f24">&#8627;<tspan font-weight="700" fill="#57606a"> documentary film</tspan></text>
+    <text x="616" y="210" font-size="11" font-style="italic" fill="#57606a" font-family="Helvetica, Arial, sans-serif">vs {audiovisual work}: child of</text>
+    <text x="616" y="224" font-size="11" font-style="italic" fill="#57606a" font-family="Helvetica, Arial, sans-serif">&#8594; descend; vs {}: <tspan font-weight="700">none</tspan> &#8594; settle</text>
+    <text x="616" y="248" font-size="11" font-style="italic" fill="#9aa3ad" font-family="Helvetica, Arial, sans-serif">too shallow -- film doesn't</text>
+    <text x="616" y="262" font-size="11" font-style="italic" fill="#9aa3ad" font-family="Helvetica, Arial, sans-serif">exist yet (corrected next)</text>
+  </g>
+
+  <!-- ═══════════ (d) Step 3 - film (retroactive correction) ═══════════ -->
+  <g>
+    <rect x="890" y="10" width="270" height="320" rx="9" fill="#fdeef2" stroke="#c94f7c" stroke-width="1.3"/>
+    <rect x="890" y="10" width="270" height="5" rx="2.5" fill="#c94f7c"/>
+    <text x="906" y="34" font-size="14.5" font-weight="700" fill="#1b1f24">(d) Step 3 -- film</text>
+    <text x="906" y="50" font-size="10.5" font-style="italic" fill="#c94f7c">the retroactive-correction step</text>
+    <g font-family="Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="12.5">
+      <text x="906" y="70" fill="#9aa3ad">audiovisual work</text>
+      <text x="906" y="86" fill="#9aa3ad" text-decoration="line-through">&#8627; documentary film</text>
+    </g>
+    <line x1="1025" y1="94" x2="1025" y2="112" stroke="#c94f7c" stroke-width="1.75" marker-end="url(#s-arrow-d)"/>
+    <text x="1025" y="106" text-anchor="middle" font-size="10" fill="#c94f7c">parent of &#8594; reparent</text>
+    <g font-family="Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13">
+      <text x="906" y="132" fill="#1b1f24">audiovisual work</text>
+      <text x="906" y="149" fill="#1b1f24">&#8627;<tspan font-weight="700" fill="#c94f7c"> film</tspan></text>
+      <text x="924" y="166" fill="#1b1f24">&#8627; documentary film</text>
+    </g>
+    <text x="906" y="210" font-size="11" font-style="italic" fill="#57606a">vs {audiovisual work}: child of</text>
+    <text x="906" y="224" font-size="11" font-style="italic" fill="#57606a">&#8594; descend; vs {documentary film}:</text>
+    <text x="906" y="238" font-size="11" font-style="italic" fill="#c94f7c" font-weight="700">parent of &#8594; retroactive insertion</text>
+    <text x="906" y="260" font-size="11" font-style="italic" fill="#3b4450">a later, more specific node corrects</text>
+    <text x="906" y="274" font-size="11" font-style="italic" fill="#3b4450">an earlier too-shallow attachment.</text>
+  </g>
+
+  <!-- ═══════════ (e) Step 4 - movie ═══════════ -->
+  <g>
+    <rect x="20" y="350" width="270" height="320" rx="9" fill="#fbfbfc" stroke="#d0d7de" stroke-width="1"/>
+    <rect x="20" y="350" width="270" height="5" rx="2.5" fill="#3b6fd6"/>
+    <text x="36" y="374" font-size="14.5" font-weight="700" fill="#1b1f24">(e) Step 4 -- movie</text>
+    <g font-family="Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13">
+      <text x="36" y="402" fill="#1b1f24">audiovisual work</text>
+      <text x="36" y="419" fill="#1b1f24">&#8627; film <tspan font-weight="700" fill="#3b6fd6">&#8853;movie</tspan></text>
+      <text x="54" y="436" fill="#1b1f24">&#8627; documentary film</text>
+    </g>
+    <text x="36" y="550" font-size="11" font-style="italic" fill="#57606a">vs {audiovisual work}: child of</text>
+    <text x="36" y="564" font-size="11" font-style="italic" fill="#57606a">&#8594; descend; vs {film}:</text>
+    <text x="36" y="578" font-size="11" font-style="italic" fill="#3b6fd6" font-weight="700">synonym &#8594; merge</text>
+    <text x="36" y="600" font-size="11" font-style="italic" fill="#3b4450">"movie" folds in as a surface</text>
+    <text x="36" y="614" font-size="11" font-style="italic" fill="#3b4450">form -- no new node created.</text>
+  </g>
+
+  <!-- ═══════════ (f) Step 5 - war film ═══════════ -->
+  <g>
+    <rect x="310" y="350" width="270" height="320" rx="9" fill="#fbfbfc" stroke="#d0d7de" stroke-width="1"/>
+    <rect x="310" y="350" width="270" height="5" rx="2.5" fill="#8a97a8"/>
+    <text x="326" y="374" font-size="14.5" font-weight="700" fill="#1b1f24">(f) Step 5 -- war film</text>
+    <g font-family="Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13">
+      <text x="326" y="402" fill="#1b1f24">audiovisual work</text>
+      <text x="326" y="419" fill="#1b1f24">&#8627; film &#8853;movie</text>
+      <text x="344" y="436" fill="#1b1f24">&#9500;&#8212; documentary film</text>
+      <text x="344" y="453" fill="#1b1f24">&#8627;<tspan font-weight="700" fill="#57606a"> war film</tspan></text>
+    </g>
+    <text x="326" y="560" font-size="11" font-style="italic" fill="#57606a">child of &#8594; descend (&#215;2);</text>
+    <text x="326" y="574" font-size="11" font-style="italic" fill="#57606a">vs {documentary film}: <tspan font-weight="700">none</tspan></text>
+    <text x="326" y="588" font-size="11" font-style="italic" fill="#57606a">&#8594; settle as child of film</text>
+  </g>
+
+  <!-- ═══════════ (g) Step 6 - action film (synthesis) ═══════════ -->
+  <g>
+    <rect x="600" y="350" width="270" height="320" rx="9" fill="#e3f6f5" stroke="#1f9d96" stroke-width="1.3"/>
+    <rect x="600" y="350" width="270" height="5" rx="2.5" fill="#1f9d96"/>
+    <text x="616" y="374" font-size="14.5" font-weight="700" fill="#1b1f24">(g) Step 6 -- action film</text>
+    <text x="616" y="390" font-size="10.5" font-style="italic" fill="#1f9d96">a new shared parent is synthesized</text>
+    <g font-family="Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="12.5">
+      <text x="616" y="410" fill="#1b1f24">audiovisual work</text>
+      <text x="616" y="426" fill="#1b1f24">&#8627; film</text>
+      <text x="634" y="442" fill="#1b1f24">&#9500;&#8212; documentary film</text>
+      <text x="634" y="458" fill="#1b1f24">&#8627;<tspan font-weight="700" fill="#1f9d96"> genre film</tspan></text>
+      <text x="670" y="474" fill="#1b1f24">&#9500;&#8212;<tspan fill="#1f9d96"> war film</tspan></text>
+      <text x="670" y="490" fill="#1b1f24">&#8627;<tspan font-weight="700" fill="#1f9d96"> action film</tspan></text>
+    </g>
+    <text x="616" y="562" font-size="11" font-style="italic" fill="#57606a">vs {documentary film, war film}:</text>
+    <text x="616" y="576" font-size="11" font-style="italic" fill="#1f9d96" font-weight="700">same class w/ war film &#8594; synthesize</text>
+    <text x="616" y="590" font-size="11" font-style="italic" fill="#3b4450">war film's edge moves film &#8594; genre film</text>
+  </g>
+
+  <!-- ═══════════ (h) Step 7 - biographical film (final tree) ═══════════ -->
+  <g>
+    <rect x="890" y="350" width="270" height="320" rx="9" fill="#fbfbfc" stroke="#d0d7de" stroke-width="1"/>
+    <rect x="890" y="350" width="270" height="5" rx="2.5" fill="#8a97a8"/>
+    <text x="906" y="374" font-size="14.5" font-weight="700" fill="#1b1f24">(h) Step 7 -- biographical film</text>
+    <text x="906" y="390" font-size="10.5" font-style="italic" fill="#57606a">final tree after all seven steps</text>
+    <g font-family="Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="12">
+      <text x="906" y="409" fill="#1b1f24">audiovisual work</text>
+      <text x="906" y="424" fill="#1b1f24">&#8627; film &#8853;movie</text>
+      <text x="924" y="439" fill="#1b1f24">&#9500;&#8212; documentary film</text>
+      <text x="942" y="454" fill="#1b1f24">&#8627;<tspan font-weight="700" fill="#57606a"> biographical film</tspan></text>
+      <text x="924" y="469" fill="#1b1f24">&#8627; genre film</text>
+      <text x="960" y="484" fill="#1b1f24">&#9500;&#8212; war film</text>
+      <text x="960" y="499" fill="#1b1f24">&#8627; action film</text>
+    </g>
+    <text x="906" y="560" font-size="11" font-style="italic" fill="#57606a">vs {documentary film, genre film}:</text>
+    <text x="906" y="574" font-size="11" font-style="italic" fill="#57606a">child of doc. film &#8594; descend;</text>
+    <text x="906" y="588" font-size="11" font-style="italic" fill="#57606a">vs {}: <tspan font-weight="700">none</tspan> &#8594; settle</text>
+  </g>
+
+  <!-- ═══════════ shared legend ═══════════ -->
+  <rect x="20" y="690" width="1140" height="52" rx="8" fill="#fbfbfc" stroke="#d0d7de" stroke-width="1"/>
+  <text x="36" y="708" font-size="11.5" font-weight="700" fill="#1b1f24">Outcome that produced each highlighted node/edge:</text>
+
+  <rect x="36" y="716" width="16" height="11" rx="2" fill="#eef1f5" stroke="#8a97a8" stroke-width="1.1" stroke-dasharray="3 2"/>
+  <text x="57" y="726" font-size="11" fill="#1b1f24">none (settle)</text>
+
+  <rect x="176" y="716" width="16" height="11" rx="2" fill="#e8f0fe" stroke="#3b6fd6" stroke-width="1.1"/>
+  <text x="197" y="726" font-size="11" fill="#1b1f24">synonym (merge)</text>
+
+  <rect x="340" y="716" width="16" height="11" rx="2" fill="#fdeef2" stroke="#c94f7c" stroke-width="1.1"/>
+  <text x="361" y="726" font-size="11" fill="#1b1f24">parent of (retroactive insertion)</text>
+
+  <rect x="580" y="716" width="16" height="11" rx="2" fill="#e3f6f5" stroke="#1f9d96" stroke-width="1.1"/>
+  <text x="601" y="726" font-size="11" fill="#1b1f24">same class (synthesize shared parent)</text>
+
+  <text x="880" y="726" font-size="10" font-style="italic" fill="#57606a">"child of" -- see decision traces above</text>
+</svg>

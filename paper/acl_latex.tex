@@ -239,10 +239,15 @@ be merged. The full prompt is given in Listing~\ref{lst:cluster-entity-types}. A
 
 Flat canonicalization removes surface redundancy but does not recover
 subsumption structure. A typed knowledge graph needs an explicit is-a hierarchy over $\mathcal{T}^*$, both to gate candidate pairs during entity deduplication (\S\ref{sec:entity-dedup}) and to generalize sparse domain/range observations during constraint induction (\S\ref{sec:constraints}). We induce this hierarchy with a single
-priority-ordered, top-down, pairwise placement procedure:
-we evaluated for this step.
+priority-ordered, top-down, pairwise placement procedure, summarized in
+Figure~\ref{fig:hierarchy-process} and described in full below.
 
-% WHY NOT FLAT CLUSTERING?
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{hierarchy_induction_example.pdf}
+\caption{The hierarchy-induction process. Nodes are popped off the priority queue highest-in-degree first and compared against the current level's candidates; the LLM's response is one of five outcomes -- using the exact terminology of the placement prompt (Appendix~\ref{sec:appendix-prompts}, Listing~\ref{lst:hierarchy-pairwise}) -- each with a different effect on the tree and on what gets placed next. A node whose placement would exceed the depth bound $D_{\max}$ is deferred into \texttt{unresolved\_children} rather than force-attached or discarded.}
+\label{fig:hierarchy-process}
+\end{figure}
 
 \paragraph{Priority queue.} Every canonical type in $\mathcal{T}^*$ is
 represented by a relation-argument profile, PPMI-weighted by default. A
@@ -271,8 +276,8 @@ whatever higher-priority bands have already placed: at every level, the
 remaining candidates (initially the whole pool; during descent, an
 already-placed node's existing children) are shown to the LLM in
 similarity-ranked batches of size $B$ (the \emph{candidate batch size}; Listing~\ref{lst:hierarchy-pairwise}), and a response of ``none of these'' escalates to the next, less-similar batch, up to $E$ escalation batches (the \emph{escalation cap}). Every
-batch response is one of four outcomes:
-% \textbf{synonym} of a candidate, \textbf{child of} a candidate, \textbf{parent of} a candidate, \textbf{none} of the candidates.
+batch response is one of five outcomes:
+% \textbf{synonym} of a candidate, \textbf{child of} a candidate, \textbf{parent of} a candidate, \textbf{same class} as a candidate, \textbf{none} of the candidates.
 \begin{itemize}
   \item \textbf{synonym} of a candidate: merge the two synonymous nodes that were not captured in flat clustering deduplication.
   \item \textbf{child of} a candidate: descend one level deeper into that
@@ -281,16 +286,31 @@ batch response is one of four outcomes:
   \item \textbf{parent of} candidates: insert the incoming node
   \emph{above} the defined candidates, detaching its existing parent edge (if any)
   and reattaching it beneath the new node, which then settles at the
-  current level. 
+  current level.
+  \item \textbf{same class} as a candidate: neither contains the other, but
+  the two are plausible siblings (e.g.\ \emph{war film} and \emph{action film}, both
+  film genres). A new shared parent is synthesized -- a short label and
+  one-sentence definition invented on the spot -- and both the incoming node
+  and the matched candidate are attached beneath it; the new parent re-enters
+  the pool to be placed by a later band, the same as any other node.
   \item \textbf{none} of the candidates fit at any escalation batch: the
   node settles at its current position -- as a new root if this occurred at
   the top level, or as an ordinary child of its current descent anchor
   otherwise.
 \end{itemize}
 
+Figure~\ref{fig:hierarchy-steps} works through all five outcomes on a small film-domain vocabulary, one placement decision per panel, including the retroactive correction that panel (d) is built around.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{hierarchy_induction.pdf}
+\caption{Hierarchy induction on a seven-type film-domain vocabulary, one placement decision per panel; panel colors match the outcome color-coding of Figure~\ref{fig:hierarchy-process}. (a) The initial priority ranking: \emph{documentary film} outranks \emph{film} by raw in-degree, a realistic instance of the sparsity-driven mis-tiering \S\ref{sec:hierarchy-induction} flags as a known risk. (b)-(c) The first two nodes settle via \textbf{none}, with \emph{documentary film} attached directly under \emph{audiovisual work} -- too shallow, since \emph{film} does not exist yet. (d) Once \emph{film} is placed, it judges itself \textbf{parent of} \emph{documentary film}: the earlier edge is removed and \emph{documentary film} is reattached beneath \emph{film}, the mechanism that lets a later, more specific node correct an earlier too-shallow attachment rather than only ever preventing it going forward. (e) \emph{movie} merges into \emph{film} as a \textbf{synonym}. (f) \emph{war film} settles under \emph{film} via \textbf{none}. (g) \emph{action film} is judged \textbf{same class} as \emph{war film}: a new shared parent, \emph{genre film}, is synthesized, and \emph{war film}'s edge moves from \emph{film} to it. (h) \emph{biographical film} settles under \emph{documentary film}, giving the final tree.}
+\label{fig:hierarchy-steps}
+\end{figure*}
+
 \paragraph{Depth bound and guarantees.} A maximum-depth cap $D_{\max}$ bounds the worst-case number of placement decisions for any candidate node. A node that would need to exceed it is placed into a structurally separate unresolved bucket rather than being force-attached or discarded, allowing to extent the resulted hieararchy later on. The result of such procedure is always a single-parent forest at every
 point in the procedure: acyclicity and the absence of transitive shortcut
-edges follow directly from the construction. 
+edges follow directly from the construction.
 
 \subsection{Entity Deduplication}
 \label{sec:entity-dedup}
@@ -582,21 +602,21 @@ reports the pooled domain/range type-judgment distribution
 \cmidrule(lr){2-3} \cmidrule(lr){4-5}
 Domain & Qwen3-Next-80B & gpt-oss-120b & Qwen3-Next-80B & gpt-oss-120b \\
 \midrule
-ont\_1\_movie     & 76.9 & -- & 74.6 & -- \\
-ont\_2\_music     & 71.2 & -- & 74.0 & -- \\
-ont\_3\_sport     & 45.3 & -- & 87.1 & -- \\
-ont\_4\_book      & 73.1 & -- & 77.6 & -- \\
-ont\_5\_military  & 52.2 & -- & 91.2 & -- \\
-ont\_6\_computer  & 79.2 & -- & 73.5 & -- \\
-ont\_7\_space     & 76.8 & -- & 70.0 & -- \\
-ont\_8\_politics  & 81.8 & -- & 81.8 & -- \\
-ont\_9\_nature    & 60.9 & -- & 88.1 & -- \\
-ont\_10\_culture  & 56.6 & -- & 89.5 & -- \\
+ont\_1\_movie     & 76.9 & 74.0 & 74.6 & 78.4 \\
+ont\_2\_music     & 71.2 & 73.8 & 74.0 & 77.4 \\
+ont\_3\_sport     & 45.3 & 47.3 & 87.1 & 87.1 \\
+ont\_4\_book      & 73.1 & 74.5 & 77.6 & 80.3 \\
+ont\_5\_military  & 52.2 & 65.2 & 91.2 & 89.6 \\
+ont\_6\_computer  & 79.2 & 82.6 & 73.5 & 73.3 \\
+ont\_7\_space     & 76.8 & 73.4 & 70.0 & 73.9 \\
+ont\_8\_politics  & 81.8 & 78.3 & 81.8 & 83.1 \\
+ont\_9\_nature    & 60.9 & 67.4 & 88.1 & 88.1 \\
+ont\_10\_culture  & 56.6 & 58.5 & 89.5 & 89.2 \\
 \midrule
-Pooled & 69.1 & -- & 79.4 & -- \\
+Pooled & 69.1 & 70.3 & 79.4 & 81.2 \\
 \bottomrule
 \end{tabular}
-\caption{Recall (grounded-only, see \S\ref{sec:results-text2kgbench}) and extra rate (\S\ref{sec:evaluation}) per Wikidata-TekGen domain, \textsc{Separate} condition, judged by GPT-4o \citep{openai2024gpt4o}. gpt-oss-120b results pending at submission time.}
+\caption{Recall (grounded-only, see \S\ref{sec:results-text2kgbench}) and extra rate (\S\ref{sec:evaluation}) per Wikidata-TekGen domain, \textsc{Separate} condition, judged by GPT-4o \citep{openai2024gpt4o}.}
 \label{tab:text2kgbench-separate}
 \end{table*}
 
@@ -609,11 +629,11 @@ Model & Side & Exact & More Gen. & More Narrow & Not Rel. \\
 \midrule
 Qwen3-Next-80B & Domain & 51.0 & 30.5 & 9.9 & 8.6 \\
 Qwen3-Next-80B & Range  & 54.2 & 29.1 & 10.1 & 6.7 \\
-gpt-oss-120b   & Domain & -- & -- & -- & -- \\
-gpt-oss-120b   & Range  & -- & -- & -- & -- \\
+gpt-oss-120b   & Domain & 57.8 & 10.8 & 23.1 & 8.3 \\
+gpt-oss-120b   & Range  & 57.7 & 21.7 & 14.3 & 6.3 \\
 \bottomrule
 \end{tabular}
-\caption{Domain/range type-judgment distribution (\%, \S\ref{sec:evaluation}), pooled over matched pairs across all Wikidata-TekGen domains, \textsc{Separate} condition. gpt-oss-120b results pending at submission time.}
+\caption{Domain/range type-judgment distribution (\%, \S\ref{sec:evaluation}), pooled over matched pairs across all Wikidata-TekGen domains, \textsc{Separate} condition.}
 \label{tab:text2kgbench-types}
 \end{table}
 
