@@ -560,7 +560,11 @@ gpt-4o's single-call extraction consistently yields markedly fewer raw
 triplets per document than gpt-oss-120b's under an identical prompt (a
 gap we confirmed holds across multiple gpt-4o access paths and is not an
 artifact of chunking, parsing, or truncation), leaving a sparser KG for
-the same retrieval procedure to draw on.
+the same retrieval procedure to draw on. As a hierarchy-depth ablation on
+the gpt-oss-120b backbone, capping \texttt{max\_depth} at 10 (the deepest
+level any node actually reached in the uncapped run) changes accuracy by
+less than half a point (74.33\% vs.\ 73.93\%), confirming the cap was
+never binding.
 
 \begin{table}[t]
 \centering
@@ -569,14 +573,17 @@ the same retrieval procedure to draw on.
 \toprule
 Backbone & Judge & Accuracy (\%) \\
 \midrule
-gpt-oss-120b & GPT-4o (independent) & 73.93 \\
-gpt-4o       & GPT-4o (self)        & 62.53 \\
+gpt-oss-120b (max\_depth=50) & GPT-4o (independent) & 73.93 \\
+gpt-oss-120b (max\_depth=10) & GPT-4o (independent) & 74.33 \\
+gpt-4o (max\_depth=50)       & GPT-4o (self)        & 62.53 \\
 \bottomrule
 \end{tabular}
 \caption{MINE overall accuracy (\S\ref{sec:eval-mine}), qualifiers folded
 into retrieved context, 1{,}500 queries. The gpt-4o row is self-judged
-(judge = construction backbone); the gpt-oss-120b row is judged
-independently.}
+(judge = construction backbone); both gpt-oss-120b rows are judged
+independently. The two gpt-oss-120b rows differ only in
+\texttt{max\_depth} (Table~\ref{tab:hyperparams}); 10 is the deepest level
+any node reached under the uncapped/50 setting.}
 \label{tab:mine}
 \end{table}
 
@@ -585,9 +592,10 @@ independently.}
 
 We report results on the Wikidata-TekGen subset of Text2KGBench
 (\S\ref{sec:evaluation}) under the \textsc{Separate} condition, for both
-backbones. Results for the \textsc{Combined} condition and for the
-DBpedia-WebNLG subset are still being collected at submission time and are
-left for the camera-ready version.
+backbones, and on the DBpedia-WebNLG subset under the \textsc{Separate}
+condition for gpt-oss-120b. Results for the \textsc{Combined} condition,
+and for Qwen3-Next-80B on DBpedia-WebNLG, are still being collected at
+submission time and are left for the camera-ready version.
 
 \subsection{Text2KGBench}
 \label{sec:results-text2kgbench}
@@ -666,6 +674,61 @@ gpt-oss-120b   & Range  & 57.7 & 21.7 & 14.3 & 6.3 \\
 }
 \caption{Domain/range type-judgment distribution (\%, \S\ref{sec:evaluation}), pooled over matched pairs across all Wikidata-TekGen domains, \textsc{Separate} condition.}
 \label{tab:text2kgbench-types}
+\end{table}
+
+\subsection{DBpedia-WebNLG}
+\label{sec:results-dbpedia}
+
+Table~\ref{tab:dbpedia-webnlg-separate} reports recall and extra rate for
+gpt-oss-120b on all 19 DBpedia-WebNLG domains, \textsc{Separate}
+condition; Qwen3-Next-80B on this subset is left for the camera-ready
+version. Unlike Table~\ref{tab:text2kgbench-separate}, these figures are
+\emph{not} filtered by the groundedness check
+(Appendix~\ref{sec:appendix-groundedness}) -- we have not yet run that
+check against this subset. This is a smaller concern here than for
+Wikidata-TekGen: DBpedia-WebNLG's sentences are generated directly from
+the gold triples (WebNLG's own construction method) rather than sampled
+from Wikipedia article bodies, so anaphoric under-specification of the
+subject is expected to be rarer, but we have not independently confirmed
+this for this subset. Pooled recall is 78.8\%, with a 23.0\% extra rate --
+both directionally consistent with, and numerically higher than, the
+grounded-only Wikidata-TekGen figures, though the two subsets differ
+enough (relation vocabulary size, sentence provenance, absence of a
+groundedness filter here) that we do not read this as a clean
+subset-vs-subset comparison.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lcc}
+\toprule
+Domain & Recall (\%) & Extra rate (\%) \\
+\midrule
+ont\_1\_university            & 71.0 & 23.9 \\
+ont\_2\_musicalwork           & 80.0 & 30.8 \\
+ont\_3\_airport               & 81.9 & 22.1 \\
+ont\_4\_building              & 73.1 & 21.0 \\
+ont\_5\_athlete               & 94.0 & 6.0  \\
+ont\_6\_politician            & 80.0 & 16.7 \\
+ont\_7\_company               & 82.8 & 13.9 \\
+ont\_8\_celestialbody         & 92.8 & 9.6  \\
+ont\_9\_astronaut             & 74.9 & 24.3 \\
+ont\_10\_comicscharacter      & 85.0 & 13.3 \\
+ont\_11\_meanoftransportation & 80.4 & 15.3 \\
+ont\_12\_monument             & 65.5 & 47.1 \\
+ont\_13\_food                 & 67.7 & 42.1 \\
+ont\_14\_writtenwork          & 79.8 & 17.2 \\
+ont\_15\_sportsteam           & 80.0 & 12.8 \\
+ont\_16\_city                 & 63.9 & 37.6 \\
+ont\_17\_artist               & 77.0 & 22.1 \\
+ont\_18\_scientist            & 87.8 & 12.6 \\
+ont\_19\_film                 & 94.4 & 16.6 \\
+\midrule
+Pooled & 78.8 & 23.0 \\
+\bottomrule
+\end{tabular}
+\caption{Recall (unfiltered, see \S\ref{sec:results-dbpedia}) and extra rate (\S\ref{sec:evaluation}) per DBpedia-WebNLG domain, gpt-oss-120b, \textsc{Separate} condition, judged by GPT-4o \citep{openai2024gpt4o}.}
+\label{tab:dbpedia-webnlg-separate}
 \end{table}
 
 \paragraph{Sentence groundedness.} Recall above is reported only on gold triples an independent GPT-4o judge confirms are actually grounded in their own sentence -- Appendix~\ref{sec:appendix-groundedness} gives the full methodology, the raw-vs-filtered breakdown per domain, a direct grounded-vs-ungrounded recall comparison, dataset examples, and discussion of prior work this connects to.
