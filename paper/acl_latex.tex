@@ -585,13 +585,32 @@ left for the camera-ready version.
 
 Table~\ref{tab:text2kgbench-separate} reports recall and extra rate
 (\S\ref{sec:evaluation}) per domain, for both backbones, under the
-\textsc{Separate} condition. Recall is computed over gold triples an
-independent GPT-4o judge confirms are actually grounded in their own
-sentence, excluding the ones flagged otherwise (see the groundedness
-paragraph and Table~\ref{tab:text2kgbench-grounded} below for the raw
-figure and the filtering methodology). Table~\ref{tab:text2kgbench-types}
-reports the pooled domain/range type-judgment distribution
-(\S\ref{sec:evaluation}) over matched pairs.
+\textsc{Separate} condition. We measure quality only on the dataset items
+whose gold triple is actually supported by its own sentence text, as
+judged by an independent GPT-4o groundedness check
+(Appendix~\ref{sec:appendix-groundedness}): Text2KGBench's test sentences
+are drawn from mid-article Wikipedia text without their source article's
+topic, so a substantial fraction of gold subjects are established only
+anaphorically, outside what the pipeline is actually shown. For reference,
+recall computed over the full, unfiltered set of gold triples -- 45.7\%
+(Qwen3-Next-80B) and 46.1\% (gpt-oss-120b) -- is already comparable to, or
+roughly 0.1 points above, the best baseline (Vicuna-13B, recall 0.34)
+reported in the original Text2KGBench study on this same subset
+\citep{mihindukulasooriya2023text2kgbench}, though the two settings are
+not directly comparable: the original task supplies the gold ontology and
+asks for ontology-compliant extraction, while OntoDisco receives no
+ontology and induces its own schema from scratch.
+
+Table~\ref{tab:text2kgbench-types} reports the pooled domain/range
+type-judgment distribution (\S\ref{sec:evaluation}) over matched pairs --
+our measure of how well the induced ontology's classes align with the
+reference one. The induced type is an exact match to the gold class
+51.0--57.8\% of the time; where it differs, the remainder splits between a
+broader (\textsc{More General}) and a narrower (\textsc{More Narrow})
+induced type rather than an unrelated one (\textsc{Not Related} stays
+under 9\% on the domain side for both backbones) -- evidence that most
+disagreement with the reference ontology is a matter of granularity, not
+an unrelated branch of the induced hierarchy.
 
 \begin{table*}[t]
 \centering
@@ -640,35 +659,7 @@ gpt-oss-120b   & Range  & 57.7 & 21.7 & 14.3 & 6.3 \\
 \label{tab:text2kgbench-types}
 \end{table}
 
-\paragraph{Sentence groundedness.} Text2KGBench's test sentences are drawn from mid-article (Wikipedia-derived) text without their source article's title or topic, but its gold triples are annotated against the full article. Consequently a gold triple's subject is often established only anaphorically, outside the sentence the pipeline is actually given -- no extractor shown only that isolated sentence can recover such a fact, independent of extraction quality. To quantify this, we use an additional GPT-4o judge to classify, for every gold triple, whether its sentence alone (no outside knowledge, no article context) actually supports it -- distinguishing true implicit omission from harmless name-form variation (e.g. "Charles Spurgeon Johnson" in the sentence vs. "Charles S. Johnson" in the reference still counts as grounded). We then report recall with ungrounded gold triples excluded from the denominator as a post-filter over the already-collected judge results, requiring no re-extraction or re-matching. Table~\ref{tab:text2kgbench-grounded} reports both figures for Qwen3-Next-80B: pooled across Wikidata-TekGen, 48.8\% of gold triples are flagged ungrounded, and recall rises from 45.7\% to 69.1\% once they are excluded, consistently across every domain.
-
-\begin{table}[t]
-\centering
-\small
-\setlength{\tabcolsep}{3pt}
-\resizebox{\columnwidth}{!}{%
-\begin{tabular}{lccc}
-\toprule
-Domain & Raw & Filtered & Ungr. (\%) \\
-\midrule
-ont\_1\_movie     & 42.8 & 76.9 & 62.2 \\
-ont\_2\_music     & 46.8 & 71.2 & 51.2 \\
-ont\_3\_sport     & 33.1 & 45.3 & 32.1 \\
-ont\_4\_book      & 49.8 & 73.1 & 45.8 \\
-ont\_5\_military  & 37.3 & 52.2 & 38.7 \\
-ont\_6\_computer  & 59.3 & 79.2 & 34.5 \\
-ont\_7\_space     & 70.3 & 76.8 & 13.6 \\
-ont\_8\_politics  & 67.3 & 81.8 & 29.2 \\
-ont\_9\_nature    & 38.8 & 60.9 & 48.0 \\
-ont\_10\_culture  & 35.8 & 56.6 & 69.4 \\
-\midrule
-Pooled & 45.7 & 69.1 & 48.8 \\
-\bottomrule
-\end{tabular}%
-}
-\caption{Recall (\%) before and after excluding gold triples an independent GPT-4o judge flags as not grounded in their own sentence, and the pooled fraction of gold triples so flagged (Qwen3-Next-80B, Wikidata-TekGen, \textsc{Separate} condition). The pooled ungrounded rate (48.8\%) differs from the per-domain average because it is computed over triples, not domains.}
-\label{tab:text2kgbench-grounded}
-\end{table}
+\paragraph{Sentence groundedness.} Recall above is reported only on gold triples an independent GPT-4o judge confirms are actually grounded in their own sentence -- Appendix~\ref{sec:appendix-groundedness} gives the full methodology, the raw-vs-filtered breakdown per domain, a direct grounded-vs-ungrounded recall comparison, dataset examples, and discussion of prior work this connects to.
 
 \section*{Limitations}
 % TODO
