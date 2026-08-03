@@ -138,7 +138,7 @@ These instructions should be used both for papers submitted for review and for f
 \begin{figure}[t]
 \centering
 \includegraphics[height=0.46\textheight,keepaspectratio]{pipeline_architecture.pdf}
-\caption{The OntoDisco pipeline. A schema-free LLM extractor (\S\ref{sec:extraction}) produces raw triplets $\mathcal{G}=(s,t_s,r,o,t_o,Q)$, canonicalized into a relation vocabulary $\mathcal{R}^*$ (\S\ref{sec:relation-dedup}) and a type vocabulary $\mathcal{T}^*$ organized into a single-parent is-a hierarchy (\S\ref{sec:type-dedup}). Entity mentions are then deduplicated using that hierarchy as a symbolic gate (\S\ref{sec:entity-dedup}), and domain/range constraints are mined by re-resolving $\mathcal{G}$ against $\mathcal{R}^*$, $\mathcal{T}^*$, and the hierarchy (\S\ref{sec:constraints}). Colored dashed arrows mark additional direct inputs beyond the sequential chain; the dotted arrow is the one adjacent step pair with \emph{no} data dependency -- constraint induction never consumes entity deduplication's output.}
+\caption{The OntoDisco pipeline. A schema-free LLM extractor (\S\ref{sec:extraction}) produces raw triplets $\mathcal{G}=(s,t_s,r,o,t_o,Q)$, canonicalized into a relation vocabulary $\mathcal{R}^*$ (\S\ref{sec:relation-dedup}) and a type vocabulary $\mathcal{T}^*$ organized into a single-parent is-a hierarchy (\S\ref{sec:type-dedup}). Entity mentions are then deduplicated using that hierarchy as a symbolic gate (\S\ref{sec:entity-dedup}), and domain/range constraints are mined by re-resolving $\mathcal{G}$ against $\mathcal{R}^*$, $\mathcal{T}^*$, and the hierarchy (\S\ref{sec:constraints}). Colored dashed arrows mark additional direct inputs beyond the sequential chain.}
 \label{fig:pipeline}
 \end{figure}
 
@@ -238,11 +238,7 @@ be merged. The full prompt is given in Listing~\ref{lst:cluster-entity-types}.
 \label{sec:hierarchy-induction}
 
 Flat canonicalization removes surface redundancy but does not recover
-subsumption structure; a typed knowledge graph needs an explicit is-a
-hierarchy over $\mathcal{T}^*$, both to gate candidate pairs during entity
-deduplication (\S\ref{sec:entity-dedup}) and to generalize sparse
-domain/range observations during constraint induction
-(\S\ref{sec:constraints}). We induce this hierarchy with a single
+subsumption structure. A typed knowledge graph needs an explicit is-a hierarchy over $\mathcal{T}^*$, both to gate candidate pairs during entity deduplication (\S\ref{sec:entity-dedup}) and to generalize sparse domain/range observations during constraint induction (\S\ref{sec:constraints}). We induce this hierarchy with a single
 priority-ordered, top-down, pairwise placement procedure:
 we evaluated for this step.
 
@@ -304,7 +300,7 @@ that homonymous names typed differently (e.g.\ \emph{Paris} the city versus
 \emph{Paris} the person) are never conflated by construction.
 
 Before embedding-based comparison, candidate pairs are restricted by a symbolic gate: two mentions are only ever compared if they share
-literally the same type, or are siblings under the same immediate parent
+literally the same type, or are siblings under the same parent
 in the induced type hierarchy (\S\ref{sec:hierarchy-induction}). HDBSCAN call only ever compares candidates within one sibling
 group: two mentions in different partitions could never have merged under the gate regardless of embedding proximity.
 
@@ -340,12 +336,11 @@ For every canonical relation with more than one
 surface form, a single LLM call classifies each surface form against the
 canonical label as \emph{forward} or \emph{inverted} (Listing~\ref{lst:relation-direction}); triplets whose
 original predicate was classified inverted have their subject and object
-types swapped before the next stage. This catches merged grammatical
-inverses.
+types swapped before the next stage.
 
 \paragraph{Stage 2: hierarchy generalization.} For each canonical
 relation's domain (subject-role types) and range (object-role types),
-considered independently, we compute the exact lowest common ancestor of
+considered independently, we compute the exact lowest common ancestor (LCA) of
 all observed types in the single-parent hierarchy. If the observed types span disconnected
 parts of the hierarchy forest, they are partitioned by which root each
 descends from and an LCA is computed independently within each partition,
@@ -457,14 +452,14 @@ domain, so a \textsc{Combined} run's per-domain breakdown is directly
 comparable to the corresponding \textsc{Separate} run for that same
 domain.
 
-\subsection{Judging Reliability}
-\label{sec:eval-reliability}
+% \subsection{Judging Reliability}
+% \label{sec:eval-reliability}
 
-A judge call that raises an exception (rate limiting, transient network
-failure) is never folded into a \emph{no match} or \textsc{Not Related}
-judgment; such calls are excluded from recall's denominator and reported
-as a separate failure count, with an explicit warning when failures make
-up a large fraction of a run.
+% A judge call that raises an exception (rate limiting, transient network
+% failure) is never folded into a \emph{no match} or \textsc{Not Related}
+% judgment; such calls are excluded from recall's denominator and reported
+% as a separate failure count, with an explicit warning when failures make
+% up a large fraction of a run.
 
 \subsection{Downstream QA Evaluation on MuSiQue}
 \label{sec:eval-qa}
