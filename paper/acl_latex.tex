@@ -573,8 +573,12 @@ left for the camera-ready version.
 
 Table~\ref{tab:text2kgbench-separate} reports recall and extra rate
 (\S\ref{sec:evaluation}) per domain, for both backbones, under the
-\textsc{Separate} condition. Table~\ref{tab:text2kgbench-types} reports
-the pooled domain/range type-judgment distribution
+\textsc{Separate} condition. Recall is computed over gold triples an
+independent GPT-4o judge confirms are actually grounded in their own
+sentence, excluding the ones flagged otherwise (see the groundedness
+paragraph and Table~\ref{tab:text2kgbench-grounded} below for the raw
+figure and the filtering methodology). Table~\ref{tab:text2kgbench-types}
+reports the pooled domain/range type-judgment distribution
 (\S\ref{sec:evaluation}) over matched pairs.
 
 \begin{table*}[t]
@@ -582,25 +586,25 @@ the pooled domain/range type-judgment distribution
 \small
 \begin{tabular}{lcccc}
 \toprule
-& \multicolumn{2}{c}{Recall} & \multicolumn{2}{c}{Extra rate} \\
+& \multicolumn{2}{c}{Recall (\%, grounded-only)} & \multicolumn{2}{c}{Extra rate (\%)} \\
 \cmidrule(lr){2-3} \cmidrule(lr){4-5}
 Domain & Qwen3-Next-80B & gpt-oss-120b & Qwen3-Next-80B & gpt-oss-120b \\
 \midrule
-ont\_1\_movie     & -- & -- & -- & -- \\
-ont\_2\_music     & -- & -- & -- & -- \\
-ont\_3\_sport     & -- & -- & -- & -- \\
-ont\_4\_book      & -- & -- & -- & -- \\
-ont\_5\_military  & -- & -- & -- & -- \\
-ont\_6\_computer  & -- & -- & -- & -- \\
-ont\_7\_space     & -- & -- & -- & -- \\
-ont\_8\_politics  & -- & -- & -- & -- \\
-ont\_9\_nature    & -- & -- & -- & -- \\
-ont\_10\_culture  & -- & -- & -- & -- \\
+ont\_1\_movie     & 76.9 & -- & 74.6 & -- \\
+ont\_2\_music     & 71.2 & -- & 74.0 & -- \\
+ont\_3\_sport     & 45.3 & -- & 87.1 & -- \\
+ont\_4\_book      & 73.1 & -- & 77.6 & -- \\
+ont\_5\_military  & 52.2 & -- & 91.2 & -- \\
+ont\_6\_computer  & 79.2 & -- & 73.5 & -- \\
+ont\_7\_space     & 76.8 & -- & 70.0 & -- \\
+ont\_8\_politics  & 81.8 & -- & 81.8 & -- \\
+ont\_9\_nature    & 60.9 & -- & 88.1 & -- \\
+ont\_10\_culture  & 56.6 & -- & 89.5 & -- \\
 \midrule
-Pooled & -- & -- & -- & -- \\
+Pooled & 69.1 & -- & 79.4 & -- \\
 \bottomrule
 \end{tabular}
-\caption{Recall and extra rate (\S\ref{sec:eval-metrics}) per Wikidata-TekGen domain, \textsc{Separate} condition, judged by GPT-4o \citep{openai2024gpt4o}.}
+\caption{Recall (grounded-only, see \S\ref{sec:results-text2kgbench}) and extra rate (\S\ref{sec:evaluation}) per Wikidata-TekGen domain, \textsc{Separate} condition, judged by GPT-4o \citep{openai2024gpt4o}. gpt-oss-120b results pending at submission time.}
 \label{tab:text2kgbench-separate}
 \end{table*}
 
@@ -611,14 +615,41 @@ Pooled & -- & -- & -- & -- \\
 \toprule
 Model & Side & Exact & More Gen. & More Narrow & Not Rel. \\
 \midrule
-Qwen3-Next-80B & Domain & -- & -- & -- & -- \\
-Qwen3-Next-80B & Range  & -- & -- & -- & -- \\
+Qwen3-Next-80B & Domain & 51.0 & 30.5 & 9.9 & 8.6 \\
+Qwen3-Next-80B & Range  & 54.2 & 29.1 & 10.1 & 6.7 \\
 gpt-oss-120b   & Domain & -- & -- & -- & -- \\
 gpt-oss-120b   & Range  & -- & -- & -- & -- \\
 \bottomrule
 \end{tabular}
-\caption{Domain/range type-judgment distribution (\S\ref{sec:eval-types}), pooled over matched pairs across all Wikidata-TekGen domains, \textsc{Separate} condition.}
+\caption{Domain/range type-judgment distribution (\%, \S\ref{sec:evaluation}), pooled over matched pairs across all Wikidata-TekGen domains, \textsc{Separate} condition. gpt-oss-120b results pending at submission time.}
 \label{tab:text2kgbench-types}
+\end{table}
+
+\paragraph{Sentence groundedness.} Text2KGBench's test sentences are drawn from mid-article (Wikipedia-derived) text without their source article's title or topic, but its gold triples are annotated against the full article. Consequently a gold triple's subject is often established only anaphorically, outside the sentence the pipeline is actually given -- no extractor shown only that isolated sentence can recover such a fact, independent of extraction quality. To quantify this, we use an additional GPT-4o judge to classify, for every gold triple, whether its sentence alone (no outside knowledge, no article context) actually supports it -- distinguishing true implicit omission from harmless name-form variation (e.g. "Charles Spurgeon Johnson" in the sentence vs. "Charles S. Johnson" in the reference still counts as grounded). We then report recall with ungrounded gold triples excluded from the denominator as a post-filter over the already-collected judge results, requiring no re-extraction or re-matching. Table~\ref{tab:text2kgbench-grounded} reports both figures for Qwen3-Next-80B: pooled across Wikidata-TekGen, 48.8\% of gold triples are flagged ungrounded, and recall rises from 45.7\% to 69.1\% once they are excluded, consistently across every domain.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+Domain & Raw & Filtered & Ungr. (\%) \\
+\midrule
+ont\_1\_movie     & 42.8 & 76.9 & 62.2 \\
+ont\_2\_music     & 46.8 & 71.2 & 51.2 \\
+ont\_3\_sport     & 33.1 & 45.3 & 32.1 \\
+ont\_4\_book      & 49.8 & 73.1 & 45.8 \\
+ont\_5\_military  & 37.3 & 52.2 & 38.7 \\
+ont\_6\_computer  & 59.3 & 79.2 & 34.5 \\
+ont\_7\_space     & 70.3 & 76.8 & 13.6 \\
+ont\_8\_politics  & 67.3 & 81.8 & 29.2 \\
+ont\_9\_nature    & 38.8 & 60.9 & 48.0 \\
+ont\_10\_culture  & 35.8 & 56.6 & 69.4 \\
+\midrule
+Pooled & 45.7 & 69.1 & 48.8 \\
+\bottomrule
+\end{tabular}
+\caption{Recall (\%) before and after excluding gold triples an independent GPT-4o judge flags as not grounded in their own sentence, and the pooled fraction of gold triples so flagged (Qwen3-Next-80B, Wikidata-TekGen, \textsc{Separate} condition). The pooled ungrounded rate (48.8\%) differs from the per-domain average because it is computed over triples, not domains.}
+\label{tab:text2kgbench-grounded}
 \end{table}
 
 \section*{Limitations}
