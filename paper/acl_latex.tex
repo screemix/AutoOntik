@@ -242,13 +242,6 @@ subsumption structure. A typed knowledge graph needs an explicit is-a hierarchy 
 priority-ordered, top-down, pairwise placement procedure, summarized in
 Figure~\ref{fig:hierarchy-process} and described in full below.
 
-\begin{figure}[t]
-\centering
-\includegraphics[width=\columnwidth]{hierarchy_induction_example.pdf}
-\caption{The hierarchy-induction process. Nodes are popped off the priority queue highest-in-degree first and compared against the current level's candidates; the LLM's response is one of five outcomes -- using the exact terminology of the placement prompt (Appendix~\ref{sec:appendix-prompts}, Listing~\ref{lst:hierarchy-pairwise}) -- each with a different effect on the tree and on what gets placed next. A node whose placement would exceed the depth bound $D_{\max}$ is deferred into \texttt{unresolved\_children} rather than force-attached or discarded.}
-\label{fig:hierarchy-process}
-\end{figure}
-
 \paragraph{Priority queue.} Every canonical type in $\mathcal{T}^*$ is
 represented by a relation-argument profile, PPMI-weighted by default. A
 one-shot pass based on the Weeds precision containment measure
