@@ -135,7 +135,7 @@ Graph-based retrieval-augmented generation depends on the quality of the knowled
 
 \begin{figure}[t]
 \centering
-\includegraphics[height=0.46\textheight,keepaspectratio]{pipeline_architecture.pdf}
+\includegraphics[height=0.46\textheight,keepaspectratio]{pipeline_architecture 1.pdf}
 \caption{The OntoDisco pipeline. A schema-free LLM extractor (\S\ref{sec:extraction}) produces raw triplets $\mathcal{G}=(s,t_s,r,o,t_o,Q)$, canonicalized into a relation vocabulary $\mathcal{R}^*$ (\S\ref{sec:relation-dedup}) and a type vocabulary $\mathcal{T}^*$ organized into a single-parent is-a hierarchy (\S\ref{sec:type-dedup}). Entity mentions are then deduplicated using that hierarchy as a symbolic gate (\S\ref{sec:entity-dedup}), and domain/range constraints are mined by re-resolving $\mathcal{G}$ against $\mathcal{R}^*$, $\mathcal{T}^*$, and the hierarchy (\S\ref{sec:constraints}). Colored dashed arrows mark additional direct inputs beyond the sequential chain.}
 \label{fig:pipeline}
 \end{figure}
@@ -143,9 +143,11 @@ Graph-based retrieval-augmented generation depends on the quality of the knowled
 \section{Introduction}
 \label{sec:introduction}
 
-Retrieval-augmented generation (RAG) grounds large language model (LLM) outputs in evidence retrieved at inference time \citep{lewis2020rag}, but retrieval over unstructured, chunked text struggles with multi-hop questions whose evidence is scattered across many chunks or documents. Graph-based RAG addresses this by retrieving over a knowledge graph (KG) instead of flat passages to support multi-hop reasoning and
-query-time generalization over specific mentions \citep{edge2024graphrag}.
-The quality of graph-based retrieval is therefore bounded by the quality of the KG that backs it: a graph with redundant, untyped nodes and unconstrained edges offers little more structure than the text it was extracted from \citep{chepurova2026wikontic}.
+% Retrieval-augmented generation (RAG) grounds large language model (LLM) outputs in evidence retrieved at inference time \citep{lewis2020retrieval}, but retrieval over unstructured, chunked text struggles with multi-hop questions whose evidence is scattered across many chunks or documents. Graph-based RAG addresses this by retrieving over a knowledge graph (KG) instead of flat passages to support multi-hop reasoning and
+% query-time generalization over specific mentions \citep{edge2024graphrag}.
+% The quality of graph-based retrieval is therefore bounded by the quality of the KG that backs it: a graph with redundant, untyped nodes and unconstrained edges offers little more structure than the text it was extracted from \citep{chepurova2026wikontic}.
+
+Retrieval-augmented generation (RAG) grounds large language model (LLM) outputs in evidence retrieved at inference time \citep{lewis2020retrieval}, but retrieval over unstructured, chunked text struggles with multi-hop questions whose evidence is scattered across many chunks or documents. Graph-based RAG addresses this by retrieving over a knowledge graph (KG) instead of flat passages, supporting multi-hop reasoning and query-time generalization over specific mentions rather than only exact ones \citep{edge2024graphrag}. This generalization, however, depends on the graph having actual type structure to generalize over. A graph with redundant, untyped nodes and unconstrained edges offers little more than the text it was extracted from \citep{chepurova2026wikontic}, since there is no category level above individual mentions to generalize to. Constructing that structure, a canonical, typed vocabulary organized into an is-a hierarchy with explicit domain/range constraints, and verifying that it is actually correct, without manual schema curation for every new corpus, is the problem this paper addresses.
 
 Constructing a KG that actually supports this kind of retrieval requires
 more than extracting entities and relations. It requires (i) a canonical,
@@ -161,14 +163,14 @@ DOLCE \citep{borgo2023dolce} offer stable, philosophically motivated
 top-level structure but cannot be extended automatically to an arbitrary
 corpus's vocabulary.
 
-Recent work instead automates (i) directly from text with LLMs. KGGen \citep{mo2025kggen} extracts open-vocabulary triplets and merges near-duplicate entity and relation surface forms through embedding-based clustering and LLM-adjudicated verification, producing a substantially cleaner graph than raw extraction alone. However, canonicalization in KGGen and other schema-free extraction pipeline is flat, so the resulting graph has no type hierarchy and no domain/range constraints. Without types, clustering has no symbolic signal to fall back on and must rely on embedding similarity and LLM judgment alone. This raises a concrete risk: distinct entities or relations that are surface-similar but semantically different (e.g., a film and a biography of its director) are more likely to be over-merged. A type hierarchy also gives downstream retrieval a coarser fallback unit when an exact entity or relation match is missed.
+Recent work instead automates (i) directly from text with LLMs. KGGen \citep{mo2025kggen} extracts open-vocabulary triplets and merges near-duplicate entity and relation surface forms through embedding-based clustering and LLM-adjudicated verification, producing a substantially cleaner graph than raw extraction alone. However, canonicalization in KGGen and other schema-free extraction pipelines is flat, so the resulting graph has no type hierarchy and no domain/range constraints. Without types, clustering has no symbolic signal to fall back on and must rely on embedding similarity and LLM judgment alone. This raises a concrete risk: distinct entities or relations that are surface-similar but semantically different (e.g., a film and a biography of its director) are more likely to be over-merged. A type hierarchy also gives downstream retrieval a coarser fallback unit when an exact entity or relation match is missed.
 
 Extending flat canonicalization into a typed, hierarchical ontology introduces three problems that flat deduplication never has to face.
 First, type labels are themselves open-vocabulary free text, so they need the same clustering-plus-LLM-verification treatment as entities and relations. But naively merging similar type labels tends to conflate a general category with its own specializations, for example \emph{film} and \emph{documentary film}: the two look embedding-similar even though one is strictly more specific than the other.
 
 Second, inducing a hierarchy over the resulting canonical types is a separate problem from canonicalizing them. If placement happens in a single pass, or bottom-up, a type can get permanently attached under too general a parent. This happens whenever a more specific sibling type is only discovered later, since nothing revisits the earlier placement to correct it. Third, relation canonicalization merges surface forms without regard to grammatical role. A canonical relation can therefore silently pool a predicate together with its grammatical inverse (e.g.\ \emph{directed} and \emph{was directed by}). This fragments the domain/range evidence that constraint induction relies on, instead of reinforcing it.
 
-We present \textbf{OntoDisco}, a pipeline that extends schema-free approaches to close this gap: on top of a
+We present \textbf{OntoDisco}, an ontology construction pipeline that extends schema-free approaches to close this gap: on top of a
 deduplicated entity and relation vocabulary, it produces a
 hyponymy-aware, hierarchically organized type vocabulary, an entity
 vocabulary deduplicated against that hierarchy, and a set of
@@ -181,7 +183,7 @@ per-relation domain/range constraints mined from it.
   (\S\ref{sec:methods}).
   \item An evaluation approach for schema-free ontology induction that
   scores an induced type hierarchy and its domain/range constraints
-  directly against a benchmark's own reference ontology.(\S\ref{sec:evaluation}).
+  directly against a benchmark's own reference ontology (\S\ref{sec:evaluation}).
   \item Empirical evidence that the induced type hierarchy improves
   downstream retrieval: a knowledge graph built around OntoDisco's typed,
   hierarchically organized structure correctly answers a majority of
@@ -198,13 +200,13 @@ At first, a schema-free LLM extractor  (\S\ref{sec:extraction}) produces a colle
 \begin{equation}
 \mathcal{G} = (s, t_s, r, o, t_o, Q),
 \end{equation}
-where $s$, -- subject entity, $t_s$ -- subject type, $r$ -- relation predicate, $o$ -- object entity, $t_o$ -- object type, $Q$ -- an optional list of qualifiers extracted from texts~\citep{chepurova2026wikontic}. Then $\mathcal{G}$ is passed further for canonization and typing. Every downstream stage resolves fields into canonical identifiers, keeping each stage's data dependencies explicit and independently inspectable.
+where $s$ -- subject entity, $t_s$ -- subject type, $r$ -- relation predicate, $o$ -- object entity, $t_o$ -- object type, and $Q$ -- an optional list of qualifiers extracted from texts~\citep{chepurova2026wikontic}. Then $\mathcal{G}$ is passed further for canonization and typing. Every downstream stage resolves fields into canonical identifiers, keeping each stage's data dependencies explicit and independently inspectable.
 
 The pipeline runs ordered stages, described in
-\S\ref{sec:relation-dedup}--\S\ref{sec:constraints}: \emph{(1) relation
+\S\ref{sec:relation-dedup}--\S\ref{sec:constraints}:  \emph{(1) Initial typed triplet extraction}, \emph{(2) relation
 canonicalization}, \emph{(2) entity-type canonicalization}, which also
 induces a taxonomy hierarchy over the resulting type vocabulary,
-\emph{(3) entity deduplication and class assignment}, and \emph{(4)
+\emph{(3) entity canonicalization and class assignment}, and \emph{(4)
 domain/range constraint induction}. The ordering is dictated by data
 dependencies. Entity-type canonicalization is conditioned on the canonical relation vocabulary as a disambiguating signal. Entity deduplication runs after the type hierarchy because it uses the hierarchy as a symbolic gate for candidate synonyms. Constraint induction derives relation constraints directly from the extracted triplets and the outputs of the first two stages.
 
@@ -216,7 +218,7 @@ The following design choices reoccur across stages. (1) Deduplication of synonym
 Subject and object types are extracted as free text, not
 constrained to any predefined schema. This schema-free design allows the canonical type vocabulary used throughout the rest of the pipeline to emerge from the data itself. The full extraction prompt is given in Appendix~\ref{sec:appendix-prompts}, Listing~\ref{lst:extraction}.
 
-\subsection{Relation Deduplication}
+\subsection{Relation Canonicalization}
 \label{sec:relation-dedup}
 
 Relation canonicalization maps the raw, free-text \texttt{relation} strings observed across all triplets onto a canonical relation vocabulary
@@ -224,18 +226,18 @@ $\mathcal{R}^*$. Candidate clusters are generated by embedding every raw
 relation surface form and clustering with HDBSCAN at similarity threshold
 $\theta_r$, as described in \S\ref{sec:reoccurring-design}. Every multi-member candidate cluster is then passed to a single LLM call that decides whether to merge all members into one relation or split them into several (see the prompt in Listing~\ref{lst:cluster-relations}); this repeats for up to $R_r$ rounds until no round shrinks $\mathcal{R}^*$ any further.
 
-\subsection{Entity Types Deduplication}
+\subsection{Entity Types canonicalization}
 \label{sec:type-dedup}
 
 This stage both flattens the raw type vocabulary into a canonical set
 $\mathcal{T}^*$ and organizes $\mathcal{T}^*$ into a taxonomy hierarchy $\mathcal{H}^*$.
 
-\subsubsection{Type canonicalization}
+\subsubsection{Type Deduplication}
 
 Candidate clusters over raw type labels are generated the same way as for
 relations (\S\ref{sec:relation-dedup}, threshold $\theta_t$), but with one additional source of evidence: each candidate label shown to the LLM verifier is annotated with the top $k_{\text{ctx}}$ canonical relations it most often co-occurs with (a PPMI-weighted relation-argument profile), giving the verifier concrete distributional evidence beyond the bare label string.
 
-The verification prompt additionally enforces a hyponymy (``kind of'') test: two labels are merged only if neither is a hyponym of the other, even when their relation-argument profiles overlap almost entirely. For example, \ \emph{documentary film} and \emph{film} participate in the same relations, but LLM instructed to keep them distinct, whereas \emph{movie} and \emph{film}, true synonyms, should
+The verification prompt additionally enforces a hyponymy (``kind of'') test: two labels are merged only if neither is a hyponym of the other, even when their relation-argument profiles overlap almost entirely. For example, \ \emph{documentary film} and \emph{film} participate in the same relations, but LLM is instructed to keep them distinct, whereas \emph{movie} and \emph{film}, true synonyms, should
 be merged. The full prompt is given in Listing~\ref{lst:cluster-entity-types}. As in relation deduplication, this embed-cluster-verify cycle repeats for up to $R_t$ rounds until a round adds no further reduction to $\mathcal{T}^*$.
 
 \subsubsection{Hierarchy induction}
@@ -248,7 +250,7 @@ priority-ordered, top-down, pairwise placement procedure:
 \paragraph{Priority queue.} Every canonical type in $\mathcal{T}^*$ is
 represented by a relation-argument profile, PPMI-weighted by default. A
 one-shot pass based on the Weeds precision containment measure
-\citep{weeds2004characterising} over the full, untouched pool computes,
+\citep{weeds2004characterising} computes
 for every type $u$, an in-degree score counting how many other types $v$
 look containable within it:
 \begin{equation}
@@ -260,16 +262,17 @@ look containable within it:
 $\mathrm{WeedsPrec}(v, u)$ is the fraction of $v$'s relation-argument weight that $u$
 also exhibits:
 \begin{equation}
-  \mathrm{WeedsPrec}(v, u) = \sum_{f \in F(v)} w_u(f) \big/ \sum_{f \in
-F(v)} w_v(f),
+  \mathrm{WeedsPrec}(v,u) =
+  \frac{\sum_{f \in F(v)\cap F(u)} w_v(f)}
+       {\sum_{f \in F(v)} w_v(f)},
 \end{equation}
 and $F(v)$ is the set of relation-argument features with nonzero
-weight under $v$, and $\tau$ is a fixed containment threshold (Table~\ref{tab:hyperparams}). The in-degree is a structural breadth signal: types are grouped into priority batches from highest in-degree to lowest to identify high-level ontology concepts first.
+weight for $v$, and $\tau$ is a fixed containment threshold (Table~\ref{tab:hyperparams}). The in-degree is a structural signal: types are grouped into priority batches from highest in-degree to lowest to identify high-level ontology concepts first.
 % If a set of external seed labels is supplied, each is matched to
 % $\mathcal{T}^*$ by normalized label (or synthesized fresh if unmatched) and pinned at the top of the queue as a root candidates with no other node can be a parent of which; without seeds, the top band of the same ranking performs root discovery instead.
 
 \paragraph{Per-node placement.} Each node is routed top-down through
-whatever higher-priority batches have already placed: at every level, the
+any higher-priority batches have already placed: at every level, the
 remaining candidates (initially the whole pool; during descent, an
 already-placed node's existing children) are shown to the LLM in
 similarity-ranked batches of size $B$ (the \emph{candidate batch size}; Listing~\ref{lst:hierarchy-pairwise}), and a response of ``none of these'' escalates to the next, less-similar batch, up to $E$ escalation batches (the \emph{escalation cap}). Every
@@ -305,11 +308,11 @@ Figure~\ref{fig:hierarchy-steps} works through all five outcomes on a small film
 \label{fig:hierarchy-steps}
 \end{figure*}
 
-\paragraph{Depth bound and guarantees.} A maximum-depth cap $D_{\max}$ bounds the worst-case number of placement decisions for any candidate node. A node that would need to exceed it is placed into a structurally separate unresolved bucket rather than being force-attached or discarded, allowing to extent the resulted hieararchy later on. The result of such procedure is always a single-parent forest at every
+\paragraph{Depth bound and guarantees.} A maximum-depth cap $D_{\max}$ bounds the worst-case number of placement decisions for any candidate node. A node that would need to exceed it is placed into a structurally separate unresolved bucket rather than being force-attached or discarded, allowing to extent the resulted hierarchy later on. The result of such procedure is always a single-parent forest at every
 point in the procedure: acyclicity and the absence of transitive shortcut
 edges follow directly from the construction.
 
-\subsection{Entity Deduplication}
+\subsection{Entity Canonicalization}
 \label{sec:entity-dedup}
 
 Entity deduplication canonicalizes entity mentions and  assigns each canonical entity types. An entity's identity is the compound pair (name, canonical type) rather than name alone, so
@@ -323,7 +326,7 @@ group.
 
 Within each partition, merging then follows the round-based procedure common to every deduplication stage (\S\ref{sec:reoccurring-design}, Listing~\ref{lst:cluster-entity-names}), applied independently per partition. Candidates are clustered at similarity threshold $\theta_e$, and each partition's embed-cluster-verify cycle repeats for up to $R_e$ rounds.
 
-\subsection{Constraints Construction}
+\subsection{Constraints Induction}
 \label{sec:constraints}
 
 \paragraph{Stage 0: re-resolution.} For every raw triplet, its subject and
@@ -379,8 +382,8 @@ pairs annotated against small, hand-curated domain ontologies, comprising
 two subsets: \textbf{Wikidata-TekGen} (10 domain ontologies) and
 \textbf{DBpedia-WebNLG} (19 domain ontologies). Each domain ontology
 defines a set of classes and object properties, every property carrying a
-declared domain and range class. Every test sentence is
-paired with a gold triple set $\{(s, r, o)\}$, where r is drawn from the ontology's
+declared domain and range class (allowed subject and object types respectively). Every test sentence is
+paired with a gold triple set $\{(s, r, o)\}$, where $r$ is drawn from the ontology's
 relation vocabulary. Gold triplets carry no per-triple type annotation, so a relation's declared domain/range class stands in for the type of subject/object. We use the \texttt{test} split with 4{,}062 sentences across the 10 Wikidata-TekGen
 ontologies and 2{,}014 across the 19 DBpedia-WebNLG ontologies.
 
@@ -501,76 +504,6 @@ Gold triples are matched from the reference side outward, specifically so that a
 \subsection{Information Retention}
 \label{sec:eval-mine}
 
-\textbf{Dataset}. We complement \S\ref{sec:onto-eval} with an extrinsic evaluation on
-\textbf{MINE} \citep{mo2025kggen}, the retrieval-and-judge benchmark. 
-We use all 101 essays (topic and content) and their
-associated generated factual queries (1{,}500 in total). Every essay's triplets are extracted
-(\S\ref{sec:extraction}) into one combined corpus and passed through the
-pipeline once, yielding a single shared ontology and KG spanning all 101
-essays.
-
-\textbf{Task and method.} We mirror KGGen's own MINE methodology exactly, for direct comparability to its reported numbers on the same benchmark: each generated query is both the retrieval query and the fact to check for. Context is retrieved from OntoDisco's constructed KG via KGGen's own
-method (sentence-embedding similarity over entities
-followed by a fixed-depth graph walk, top-$k=8$), and an LLM judge is asked
-a single binary question: whether the retrieved context contains the
-information stated in the query. We report \emph{overall accuracy}: the fraction of the
-1{,}500 queries the judge scores as supported by their retrieved context,
-both Averaged over the whole benchmark and broken down per essay.
-
-% \textbf{Results.} Table~\ref{tab:mine} reports overall accuracy: gpt-oss-120b reaches 73.93\% (1{,}109/1{,}500),
-% judged independently by GPT-4o; gpt-4o itself reaches 62.53\%
-% (938/1{,}500). Unlike the Text2KGBench evaluation above, the gpt-4o row is
-% \emph{not} judged independently of its own construction backbone -- GPT-4o
-% is both the KG-building model and the judge for that row, since MINE's
-% judge is fixed to GPT-4o throughout. We found gpt-4o's lower score traces
-% to extraction, not to canonicalization or retrieval: on this corpus
-% gpt-4o's single-call extraction consistently yields markedly fewer raw
-% triplets per document than gpt-oss-120b's under an identical prompt (a
-% gap we confirmed holds across multiple gpt-4o access paths and is not an
-% artifact of chunking, parsing, or truncation), leaving a sparser KG for
-% the same retrieval procedure to draw on.
-
-\begin{table}[t]
-\centering
-\small
-\begin{tabular}{lc}
-\toprule
-Backbone & Accuracy (\%) \\
-\midrule
-OntoDisco, gpt-oss-120b & 73.93 \\
-KGGen, gpt-4o & 66 \\
-\bottomrule
-\end{tabular}
-\caption{MINE overall accuracy (\S\ref{sec:eval-mine}). AutoOnto's hierarchical structure improves disambiguation and hence retrieval.}
-\label{tab:mine}
-\end{table}
-
-\section{Results}
-\label{sec:results}
-
-Across intrinsic ontology evaluation (Text2KGBench, \S\ref{sec:results-text2kgbench}--\S\ref{sec:results-dbpedia}) and extrinsic retrieval evaluation (MINE, \S\ref{sec:results-mine}), OntoDisco's schema-free construction recovers a type hierarchy and canonical vocabulary that align substantially with independently-curated reference ontologies and that support effective downstream retrieval, without ever being given a schema to work from.
-
-\subsection{Text2KGBench}
-\label{sec:results-text2kgbench}
-
-Table~\ref{tab:text2kgbench-separate} reports recall and extra rate
-(\S\ref{sec:evaluation}) per domain. We measure quality only on the dataset items
-whose gold triple is actually supported by its own sentence text, as
-judged by an independent GPT-4o groundedness check
-(Appendix~\ref{sec:appendix-groundedness}): Text2KGBench's test sentences
-are drawn from mid-article Wikipedia text without their source article's
-topic, so a substantial fraction of gold subjects are established only
-anaphorically, outside what the pipeline is actually shown. 
-
-Table~\ref{tab:text2kgbench-types} reports the Averaged domain/range
-type-judgment distribution (\S\ref{sec:evaluation}) over matched pairs. It measures how well the induced ontology's classes align with the
-reference one. The induced type is an exact match to the gold class
-51.0--57.8\% of the time; where it differs, the remainder splits between a
-broader (\textsc{More General}) and a narrower (\textsc{More Narrow})
-induced type rather than an unrelated one (\textsc{Not Related} stays
-under 9\% on the domain side for both backbones). These results provide evidence that most
-disagreement with the reference ontology is a matter of granularity, not an unrelated branch of the induced hierarchy.
-
 \begin{table*}[t]
 \centering
 \small
@@ -618,22 +551,6 @@ gpt-oss-120b   & Range  & 57.7 & 21.7 & 14.3 & 6.3 \\
 \label{tab:text2kgbench-types}
 \end{table}
 
-\subsection{DBpedia-WebNLG}
-\label{sec:results-dbpedia}
-
-Table~\ref{tab:dbpedia-webnlg-separate} reports recall and extra rate for
-both backbones on all 19 DBpedia-WebNLG domains. Unlike
-Table~\ref{tab:text2kgbench-separate}, these figures are not passed
-through a groundedness filter: DBpedia-WebNLG's sentences are generated
-directly from the gold triples (WebNLG's own construction method) rather
-than sampled from Wikipedia article bodies, so we did not perform a
-groundedness check for this subset. Pooled recall is 78.8\% for
-gpt-oss-120b and 76.2\% for Qwen3-Next-80B, with extra rates of 23.0\%
-and 25.1\% respectively -- the two backbones perform much more similarly
-here than on Wikidata-TekGen's domain/range type-judgment
-(Table~\ref{tab:text2kgbench-types}), where the gap between them was
-substantially wider.
-
 \begin{table*}[t]
 \centering
 \small
@@ -670,18 +587,109 @@ Pooled & 76.2 & 78.8 & 25.1 & 23.0 \\
 \label{tab:dbpedia-webnlg-separate}
 \end{table*}
 
+
+\textbf{Dataset}. We complement \S\ref{sec:onto-eval} with an extrinsic evaluation on
+\textbf{MINE} \citep{mo2025kggen}, the retrieval-and-judge benchmark. 
+We use all 100 essays (topic and content) and their
+associated generated factual queries (1{,}500 in total). Every essay's triplets are extracted
+(\S\ref{sec:extraction}) into one combined corpus and passed through the
+pipeline once, yielding a single shared ontology and KG spanning all 100
+essays.
+
+\textbf{Task and method.} We mirror KGGen's own MINE evaluation methodology exactly, for direct comparability to its reported numbers on the same benchmark: each generated query is both the retrieval query and the fact to check for. Context is retrieved from OntoDisco's constructed KG via KGGen's own
+method (sentence-embedding similarity over entities
+followed by a fixed-depth graph walk, top-$k=8$), and an LLM judge is asked
+a single binary question: whether the retrieved context contains the
+information stated in the query. We report \emph{overall accuracy}: the fraction of the
+1{,}500 queries the judge scores as supported by their retrieved context,
+both averaged over the whole benchmark and broken down per essay.
+
+% \textbf{Results.} Table~\ref{tab:mine} reports overall accuracy: gpt-oss-120b reaches 73.93\% (1{,}109/1{,}500),
+% judged independently by GPT-4o; gpt-4o itself reaches 62.53\%
+% (938/1{,}500). Unlike the Text2KGBench evaluation above, the gpt-4o row is
+% \emph{not} judged independently of its own construction backbone -- GPT-4o
+% is both the KG-building model and the judge for that row, since MINE's
+% judge is fixed to GPT-4o throughout. We found gpt-4o's lower score traces
+% to extraction, not to canonicalization or retrieval: on this corpus
+% gpt-4o's single-call extraction consistently yields markedly fewer raw
+% triplets per document than gpt-oss-120b's under an identical prompt (a
+% gap we confirmed holds across multiple gpt-4o access paths and is not an
+% artifact of chunking, parsing, or truncation), leaving a sparser KG for
+% the same retrieval procedure to draw on.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lc}
+\toprule
+Backbone & Accuracy (\%) \\
+\midrule
+OntoDisco, gpt-oss-120b & 73.93 \\
+KGGen, gpt-4o & 66 \\
+KGGen, Claude Sonnet 3.5 & 73 \\
+KGGen, Gemini 2.0 Flash & 44 \\
+% GraphRAG, gpt4o & 48 \\
+\bottomrule
+\end{tabular}
+\caption{MINE overall accuracy (\S\ref{sec:eval-mine}). AutoOnto's hierarchical structure improves disambiguation and hence retrieval.}
+\label{tab:mine}
+\end{table}
+
+\section{Results}
+\label{sec:results}
+
+Across intrinsic ontology evaluation (Text2KGBench, \S\ref{sec:results-text2kgbench}--\S\ref{sec:results-dbpedia}) and extrinsic retrieval evaluation (MINE, \S\ref{sec:results-mine}), OntoDisco's schema-free construction recovers a type hierarchy and canonical vocabulary that align substantially with independently-curated reference ontologies and that support effective downstream retrieval.
+
+\subsection{Text2KGBench}
+\label{sec:results-text2kgbench}
+
+Table~\ref{tab:text2kgbench-separate} reports recall and extra rate
+(\S\ref{sec:evaluation}) per domain. We measure quality only on the dataset items
+whose gold triple is actually supported by its own sentence text, as
+judged by an independent GPT-4o groundedness check
+(Appendix~\ref{sec:appendix-groundedness}): Text2KGBench's test sentences
+are drawn from mid-article Wikipedia text without their source article's
+topic, so a substantial fraction of gold subjects are established only
+anaphorically, outside what the pipeline is actually shown. 
+
+Table~\ref{tab:text2kgbench-types} reports the Averaged domain/range
+type-judgment distribution (\S\ref{sec:evaluation}) over matched pairs. It measures how well the induced ontology's classes align with the
+reference one. The induced type is an exact match to the gold class
+51.0--57.8\% of the time; where it differs, the remainder splits between a
+broader (\textsc{More General}) and a narrower (\textsc{More Narrow})
+induced type rather than an unrelated one (\textsc{Not Related} stays
+under 9\% on the domain side for both backbones). These results provide evidence that most
+disagreement with the reference ontology is a matter of granularity, not an unrelated branch of the induced hierarchy.
+
+\subsection{DBpedia-WebNLG}
+\label{sec:results-dbpedia}
+
+Table~\ref{tab:dbpedia-webnlg-separate} reports recall and extra rate for
+both backbones on all 19 DBpedia-WebNLG domains. Unlike
+Table~\ref{tab:text2kgbench-separate}, these figures are not passed
+through a groundedness filter: DBpedia-WebNLG's sentences are generated
+directly from the gold triples (WebNLG's own construction method) rather
+than sampled from Wikipedia article bodies, so we did not perform a
+groundedness check for this subset. Averaged recall is 78.8\% for
+gpt-oss-120b and 76.2\% for Qwen3-Next-80B, with extra rates of 23.0\%
+and 25.1\% respectively -- the two backbones perform much more similarly
+here than on Wikidata-TekGen's domain/range type-judgment
+(Table~\ref{tab:text2kgbench-types}), where the gap between them was
+substantially wider.
+
+
 \subsection{MINE}
 \label{sec:results-mine}
 
 Table~\ref{tab:mine} reports overall accuracy on MINE (\S\ref{sec:eval-mine}). OntoDisco built with gpt-oss-120b reaches 73.93\% accuracy vs KGGen 66\% with gpt4o (1{,}109/1{,}500 queries). Unlike the Text2KGBench evaluation above, MINE does not score agreement with a reference schema directly. It queries the constructed KG through embedding-similarity retrieval and a fixed-depth graph walk over entities. So this result demonstrates that the typed, canonicalized KG built for a corpus with no supplied schema improves downstream retrieval.
 
-\paragraph{Ontology Quality.} Taken together, Tables~\ref{tab:text2kgbench-separate}--\ref{tab:mine}--~\ref{tab:text2kgbench-separate}  suggest OntoDisco's schema-free construction recovers a usable typed ontology. Domain/range disagreement with the reference ontology (Table~\ref{tab:text2kgbench-types}) is dominated by granularity mismatches (\textsc{More General}/\textsc{More Narrow}).  Unrelated types (\textsc{Not Related} stays under 9\% on the domain side and under 7\% on the range side. Together with MINE's retrieval accuracy, this is evidence that the induced hierarchy places types in approximately the right region of the ontology, and that this structure is usable for downstream retrieval, even where it does not converge on the exact reference granularity.
+\paragraph{Ontology Quality.} Taken together, Tables~\ref{tab:text2kgbench-separate}--\ref{tab:mine} suggest OntoDisco's schema-free construction recovers a usable typed ontology. Domain/range disagreement with the reference ontology (Table~\ref{tab:text2kgbench-types}) is dominated by granularity mismatches (\textsc{More General}/\textsc{More Narrow}).  Unrelated types (\textsc{Not Related} stays under 9\% on the domain side and under 7\% on the range side. Together with MINE's retrieval accuracy, this is evidence that the induced hierarchy places types in approximately the right region of the ontology, and that this structure is usable for downstream retrieval, even where it does not converge on the exact reference granularity.
 
 \section*{Limitations}
 
 Our evaluation measures agreement between the induced ontology and a benchmark's reference schema, and the usability of the resulting KG for downstream retrieval; it does not directly measure extraction precision, since a schema-free pipeline can correctly extract facts a narrow, curated reference ontology simply does not cover, and such extractions are excluded from recall by design rather than scored as errors. Finally, our evaluation covers English-language corpora and existing benchmark ontologies only; generalization to other languages remains untested.
 
-\section*{Acknowledgments}
+% \section*{Acknowledgments}
 % TODO
 
 \bibliography{custom}
@@ -1045,7 +1053,7 @@ You are a knowledge graph engineer. Below is a group of entity mentions, each in
 Your task:
 1. Decide which mentions refer to the SAME real-world entity.
 2. Group mentions of the same entity together.
-3. For each group, choose the BEST canonical name — the most complete, unambiguous form of the entity name. The canonical name must be JUST the entity name, WITHOUT the [type] bracket.
+3. For each group, choose the BEST canonical name -- the most complete, unambiguous form of the entity name. The canonical name must be JUST the entity name, WITHOUT the [type] bracket.
 4. Each group's "members" array must contain the EXACT compound strings as provided (including the [type] part).
 
 IMPORTANT RULES:
@@ -1074,21 +1082,21 @@ directed by" describe the same relationship, just told with subject and object s
 Your task: classify EACH surface form relative to the canonical label's own direction, using
 exactly one of:
 
-1. "forward" — this surface form keeps the same subject/object roles as the canonical label.
+1. "forward" -- this surface form keeps the same subject/object roles as the canonical label.
    Example: canonical "directed", surface form "helmed" -> "forward" (same roles: person directs
    film).
 
-2. "inverted" — this surface form swaps subject and object relative to the canonical label: what
+2. "inverted" -- this surface form swaps subject and object relative to the canonical label: what
    is the SUBJECT under the canonical label becomes the OBJECT under this surface form, and vice
    versa. Example: canonical "directed" (subject=director, object=film), surface form "was
    directed by" -> "inverted" (under this form, the film is the grammatical subject and the
    director the object).
 
-The canonical label itself is always "forward" by definition — it is the reference direction
+The canonical label itself is always "forward" by definition -- it is the reference direction
 everything else is judged against.
 
 Base this purely on grammatical/semantic role structure, not on which surface form is more
-frequent or "sounds more natural" — frequency has nothing to do with direction.
+frequent or "sounds more natural" -- frequency has nothing to do with direction.
 
 Return ONLY valid JSON (no explanation, no markdown), using this format:
 {
