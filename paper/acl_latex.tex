@@ -531,27 +531,29 @@ Averaged & 69.1 & 70.3 & 79.4 & 81.2 \\
 \label{tab:text2kgbench-separate}
 \end{table*}
 
-\begin{table}[t]
+\begin{table*}[t]
 \centering
 \small
-\setlength{\tabcolsep}{3pt}
-\resizebox{\columnwidth}{!}{%
-\begin{tabular}{llcccc}
+\begin{tabular}{lllcccc}
 \toprule
-& & \multicolumn{3}{c}{Related} & Unrelated \\
-\cmidrule(lr){3-5} \cmidrule(lr){6-6}
-Model & Side & Exact & More Gen. & More Narrow & Not Rel. \\
+& & & \multicolumn{3}{c}{Related} & Unrelated \\
+\cmidrule(lr){4-6} \cmidrule(lr){7-7}
+Dataset & Model & Side & Exact & More Gen. & More Narrow & Not Rel. \\
 \midrule
-Qwen3-Next-80B & Domain & 51.0 & 30.5 & 9.9 & 8.6 \\
-Qwen3-Next-80B & Range  & 54.2 & 29.1 & 10.1 & 6.7 \\
-gpt-oss-120b   & Domain & 57.8 & 10.8 & 23.1 & 8.3 \\
-gpt-oss-120b   & Range  & 57.7 & 21.7 & 14.3 & 6.3 \\
+Wikidata-TekGen & Qwen3-Next-80B & Domain & 51.0 & 30.5 & 9.9  & 8.6 \\
+Wikidata-TekGen & Qwen3-Next-80B & Range  & 54.2 & 29.1 & 10.1 & 6.7 \\
+Wikidata-TekGen & gpt-oss-120b   & Domain & 57.8 & 10.8 & 23.1 & 8.3 \\
+Wikidata-TekGen & gpt-oss-120b   & Range  & 57.7 & 21.7 & 14.3 & 6.3 \\
+\midrule
+DBpedia-WebNLG  & Qwen3-Next-80B & Domain & 33.1 & 37.6 & 17.5 & 11.8 \\
+DBpedia-WebNLG  & Qwen3-Next-80B & Range  & 40.4 & 23.2 & 25.4 & 10.9 \\
+DBpedia-WebNLG  & gpt-oss-120b   & Domain & 27.2 & 36.2 & 23.7 & 12.9 \\
+DBpedia-WebNLG  & gpt-oss-120b   & Range  & 41.0 & 16.3 & 30.2 & 12.4 \\
 \bottomrule
-\end{tabular}%
-}
-\caption{Domain/range type-judgment distribution (\%, \S\ref{sec:evaluation}), Averaged over matched pairs across all Wikidata-TekGen domains}
+\end{tabular}
+\caption{Domain/range type-judgment distribution (\%, \S\ref{sec:evaluation}), averaged over matched pairs across all domains of each Text2KGBench subset.}
 \label{tab:text2kgbench-types}
-\end{table}
+\end{table*}
 
 \begin{table*}[t]
 \centering
@@ -654,13 +656,13 @@ are drawn from mid-article Wikipedia text without their source article's
 topic, so a substantial fraction of gold subjects are established only
 anaphorically, outside what the pipeline is actually shown. 
 
-Table~\ref{tab:text2kgbench-types} reports the Averaged domain/range
-type-judgment distribution (\S\ref{sec:evaluation}) over matched pairs. It measures how well the induced ontology's classes align with the
-reference one. The induced type is an exact match to the gold class
+Table~\ref{tab:text2kgbench-types} reports the domain/range
+type-judgment distribution (\S\ref{sec:evaluation}) over matched pairs, separately for each Text2KGBench subset. It measures how well the induced ontology's classes align with the
+reference one. On Wikidata-TekGen, the induced type is an exact match to the gold class
 51.0--57.8\% of the time; where it differs, the remainder splits between a
 broader (\textsc{More General}) and a narrower (\textsc{More Narrow})
 induced type rather than an unrelated one (\textsc{Not Related} stays
-under 9\% on the domain side for both backbones). These results provide evidence that most
+under 9\% on the domain side and under 7\% on the range side for both backbones). These results provide evidence that most
 disagreement with the reference ontology is a matter of granularity, not an unrelated branch of the induced hierarchy.
 
 \subsection{DBpedia-WebNLG}
@@ -679,13 +681,26 @@ here than on Wikidata-TekGen's domain/range type-judgment
 (Table~\ref{tab:text2kgbench-types}), where the gap between them was
 substantially wider.
 
+Table~\ref{tab:text2kgbench-types}'s DBpedia-WebNLG rows report the same
+type-judgment distribution for this subset. Exact match is lower here
+(27.2--41.0\% across sides and backbones) and \textsc{Not Related} is
+higher (10.9--12.9\%, versus under 9\% on Wikidata-TekGen) -- consistent
+with DBpedia-WebNLG's ontologies being curated independently of
+Wikidata's class system, so a type induced purely from AutoOntic's own
+corpus vocabulary is less likely to line up with a DBpedia class by
+construction. Even so, granularity mismatches (\textsc{More General}/\textsc{More Narrow})
+still account for roughly 80\% of non-exact matches on both sides, so the
+induced hierarchy is still placing DBpedia-WebNLG's types in
+approximately the right region, just less often exactly on the reference
+node.
+
 
 \subsection{MINE}
 \label{sec:results-mine}
 
 Table~\ref{tab:mine} reports overall accuracy on MINE (\S\ref{sec:eval-mine}). AutoOntic built with gpt-oss-120b reaches 73.93\% accuracy vs KGGen 66\% with gpt4o (1{,}109/1{,}500 queries). Unlike the Text2KGBench evaluation above, MINE does not score agreement with a reference schema directly. It queries the constructed KG through embedding-similarity retrieval and a fixed-depth graph walk over entities. So this result demonstrates that the typed, canonicalized KG built for a corpus with no supplied schema improves downstream retrieval.
 
-\paragraph{Ontology Quality.} Taken together, Tables~\ref{tab:text2kgbench-separate}--\ref{tab:mine} suggest AutoOntic's schema-free construction recovers a usable typed ontology. Domain/range disagreement with the reference ontology (Table~\ref{tab:text2kgbench-types}) is dominated by granularity mismatches (\textsc{More General}/\textsc{More Narrow}).  Unrelated types (\textsc{Not Related} stays under 9\% on the domain side and under 7\% on the range side. Together with MINE's retrieval accuracy, this is evidence that the induced hierarchy places types in approximately the right region of the ontology, and that this structure is usable for downstream retrieval, even where it does not converge on the exact reference granularity.
+\paragraph{Ontology Quality.} Taken together, Tables~\ref{tab:text2kgbench-separate}--\ref{tab:mine} suggest AutoOntic's schema-free construction recovers a usable typed ontology. Domain/range disagreement with the reference ontology (Table~\ref{tab:text2kgbench-types}) is dominated by granularity mismatches (\textsc{More General}/\textsc{More Narrow}) on both Text2KGBench subsets. Unrelated types (\textsc{Not Related}) stay under 9\% on Wikidata-TekGen and under 13\% on DBpedia-WebNLG, on both the domain and range sides. Together with MINE's retrieval accuracy, this is evidence that the induced hierarchy places types in approximately the right region of the ontology, and that this structure is usable for downstream retrieval, even where it does not converge on the exact reference granularity.
 
 \section*{Limitations}
 
