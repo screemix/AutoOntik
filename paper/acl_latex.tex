@@ -130,13 +130,13 @@
 \begin{document}
 \maketitle
 \begin{abstract}
-Graph-based retrieval-augmented generation depends on the quality of the knowledge graph (KG) it retrieves over, yet schema-free LLM-based extraction pipelines typically produce flat graphs: deduplicated entities and relations with no type hierarchy and no domain/range constraints. We present OntoDisco, a pipeline that extends schema-free KG construction with hyponymy-aware type canonicalization, a priority-ordered hierarchy induction procedure, entity deduplication gated by the induced hierarchy, and domain/range constraint mining. We evaluate OntoDisco both intrinsically, against the reference ontologies of Text2KGBench's Wikidata-TekGen and DBpedia-WebNLG subsets, and extrinsically, on downstream retrieval accuracy on the MINE benchmark. Across two LLM backbones, OntoDisco's induced types agree with the reference ontology's domain and range classes on a majority of matched relations, and where they disagree, the mismatch is overwhelmingly a matter of granularity rather than an unrelated branch of the induced hierarchy. On MINE, a knowledge graph built around OntoDisco's typed, hierarchically organized structure correctly answers a majority of retrieval queries. Beyond the pipeline itself, we propose an evaluation methodology for schema-free ontology induction that scores an induced hierarchy directly against a benchmark's own reference ontology.
+Graph-based retrieval-augmented generation depends on the quality of the knowledge graph (KG) it retrieves over, yet schema-free LLM-based extraction pipelines typically produce flat graphs: deduplicated entities and relations with no type hierarchy and no domain/range constraints. We present AutoOntic, a pipeline that extends schema-free KG construction with hyponymy-aware type canonicalization, a priority-ordered hierarchy induction procedure, entity deduplication gated by the induced hierarchy, and domain/range constraint mining. We evaluate AutoOntic both intrinsically, against the reference ontologies of Text2KGBench's Wikidata-TekGen and DBpedia-WebNLG subsets, and extrinsically, on downstream retrieval accuracy on the MINE benchmark. Across two LLM backbones, AutoOntic's induced types agree with the reference ontology's domain and range classes on a majority of matched relations, and where they disagree, the mismatch is overwhelmingly a matter of granularity rather than an unrelated branch of the induced hierarchy. On MINE, a knowledge graph built around AutoOntic's typed, hierarchically organized structure correctly answers a majority of retrieval queries. Beyond the pipeline itself, we propose an evaluation methodology for schema-free ontology induction that scores an induced hierarchy directly against a benchmark's own reference ontology.
 \end{abstract}
 
 \begin{figure}[t]
 \centering
 \includegraphics[height=0.46\textheight,keepaspectratio]{pipeline_architecture 1.pdf}
-\caption{The OntoDisco pipeline. A schema-free LLM extractor (\S\ref{sec:extraction}) produces raw triplets $\mathcal{G}=(s,t_s,r,o,t_o,Q)$, canonicalized into a relation vocabulary $\mathcal{R}^*$ (\S\ref{sec:relation-dedup}) and a type vocabulary $\mathcal{T}^*$ organized into a single-parent is-a hierarchy (\S\ref{sec:type-dedup}). Entity mentions are then deduplicated using that hierarchy as a symbolic gate (\S\ref{sec:entity-dedup}), and domain/range constraints are mined by re-resolving $\mathcal{G}$ against $\mathcal{R}^*$, $\mathcal{T}^*$, and the hierarchy (\S\ref{sec:constraints}). Colored dashed arrows mark additional direct inputs beyond the sequential chain.}
+\caption{The AutoOntic pipeline. A schema-free LLM extractor (\S\ref{sec:extraction}) produces raw triplets $\mathcal{G}=(s,t_s,r,o,t_o,Q)$, canonicalized into a relation vocabulary $\mathcal{R}^*$ (\S\ref{sec:relation-dedup}) and a type vocabulary $\mathcal{T}^*$ organized into a single-parent is-a hierarchy (\S\ref{sec:type-dedup}). Entity mentions are then deduplicated using that hierarchy as a symbolic gate (\S\ref{sec:entity-dedup}), and domain/range constraints are mined by re-resolving $\mathcal{G}$ against $\mathcal{R}^*$, $\mathcal{T}^*$, and the hierarchy (\S\ref{sec:constraints}). Colored dashed arrows mark additional direct inputs beyond the sequential chain.}
 \label{fig:pipeline}
 \end{figure}
 
@@ -170,14 +170,14 @@ First, type labels are themselves open-vocabulary free text, so they need the sa
 
 Second, inducing a hierarchy over the resulting canonical types is a separate problem from canonicalizing them. If placement happens in a single pass, or bottom-up, a type can get permanently attached under too general a parent. This happens whenever a more specific sibling type is only discovered later, since nothing revisits the earlier placement to correct it. Third, relation canonicalization merges surface forms without regard to grammatical role. A canonical relation can therefore silently pool a predicate together with its grammatical inverse (e.g.\ \emph{directed} and \emph{was directed by}). This fragments the domain/range evidence that constraint induction relies on, instead of reinforcing it.
 
-We present \textbf{OntoDisco}, an ontology construction pipeline that extends schema-free approaches to close this gap: on top of a
+We present \textbf{AutoOntic}, an ontology construction pipeline that extends schema-free approaches to close this gap: on top of a
 deduplicated entity and relation vocabulary, it produces a
 hyponymy-aware, hierarchically organized type vocabulary, an entity
 vocabulary deduplicated against that hierarchy, and a set of
 per-relation domain/range constraints mined from it.
 (\S\ref{sec:methods}). Our contributions are:
 \begin{itemize}
-  \item OntoDisco, extraction and
+  \item AutoOntic, extraction and
   canonicalization pipeline that induces a type hierarchy and
   domain/range constraints from raw text with no predefined schema
   (\S\ref{sec:methods}).
@@ -185,17 +185,17 @@ per-relation domain/range constraints mined from it.
   scores an induced type hierarchy and its domain/range constraints
   directly against a benchmark's own reference ontology (\S\ref{sec:evaluation}).
   \item Empirical evidence that the induced type hierarchy improves
-  downstream retrieval: a knowledge graph built around OntoDisco's typed,
+  downstream retrieval: a knowledge graph built around AutoOntic's typed,
   hierarchically organized structure correctly answers a majority of
   MINE's retrieval queries (\S\ref{sec:eval-mine}, \S\ref{sec:results-mine}).
 \end{itemize}
-\section{Methods: OntoDisco}
+\section{Methods: AutoOntic}
 \label{sec:methods}
 
 % \subsection{Overview}
 % \label{sec:methods-overview}
 
-OntoDisco turns a textual corpus into a canonicalized, typed knowledge graph: a deduplicated relation vocabulary, a deduplicated and hierarchically organized entity-type vocabulary, a deduplicated entity vocabulary with class assignments, and a set of relation-level domain/range constraints (Figure~\ref{fig:pipeline}).
+AutoOntic turns a textual corpus into a canonicalized, typed knowledge graph: a deduplicated relation vocabulary, a deduplicated and hierarchically organized entity-type vocabulary, a deduplicated entity vocabulary with class assignments, and a set of relation-level domain/range constraints (Figure~\ref{fig:pipeline}).
 At first, a schema-free LLM extractor  (\S\ref{sec:extraction}) produces a collection of raw triplets: 
 \begin{equation}
 \mathcal{G} = (s, t_s, r, o, t_o, Q),
@@ -376,7 +376,7 @@ below $\tau_{\text{hint}}$ (values in Table~\ref{tab:hyperparams}).
 
 \subsection{Ontology evaluation}
 \label{sec:onto-eval}
-\textbf{Benchmark}. We evaluate OntoDisco on \textbf{Text2KGBench}
+\textbf{Benchmark}. We evaluate AutoOntic on \textbf{Text2KGBench}
 \citep{mihindukulasooriya2023text2kgbench}, a benchmark of sentence--triple
 pairs annotated against small, hand-curated domain ontologies, comprising
 two subsets: \textbf{Wikidata-TekGen} (10 domain ontologies) and
@@ -391,7 +391,7 @@ ontologies and 2{,}014 across the 19 DBpedia-WebNLG ontologies.
 % additionally encode a class hierarchy via \texttt{rdfs:subClassOf}, whereas
 % the DBpedia-WebNLG ontologies did not.
 
-Text2KGBench's intended task is \emph{ontology-guided} generation: a system is given the ontology and must extract compliant triplets. We consider the inverse setting: OntoDisco is schema-free and receives no ontology as input. Instead, it must induce a schema and extract triplets from the text. We then compare the induced schema and extracted triplets against the benchmark's gold ontology and gold triplets.
+Text2KGBench's intended task is \emph{ontology-guided} generation: a system is given the ontology and must extract compliant triplets. We consider the inverse setting: AutoOntic is schema-free and receives no ontology as input. Instead, it must induce a schema and extract triplets from the text. We then compare the induced schema and extracted triplets against the benchmark's gold ontology and gold triplets.
 
 We used two LLM backbones driving every stage of the pipeline: Qwen3-Next-80B-A3B-Instruct
 \citep{qwen2025qwen3} and gpt-oss-120b \citep{openai2025gptoss}, both run with the identical pipeline hyperparameters listed in Table~\ref{tab:hyperparams} (Appendix~\ref{sec:appendix-hyperparams}). Judging is performed in every condition by a fixed model, GPT-4o
@@ -414,12 +414,12 @@ We used two LLM backbones driving every stage of the pipeline: Qwen3-Next-80B-A3
 % on its own, rather than only ever being evaluated one domain at a time.
 
 
-\textbf{Triplet matching}. For every gold triple, we retrieve the extracted triplets OntoDisco produced from the same sentence and ask an LLM judge to select, if any, the one that expresses the same real-world fact as the gold triple, allowing for paraphrased relation wording and for subject and object being swapped (a grammatical inverse of the gold triple, e.g.\ \emph{X composed Y} vs.\ \emph{Y was composed by X}). The judge returns a matched index with direction \emph{same}, a matched index with direction \emph{inverse}, or no match. A matched extracted triple is removed from that sentence's candidate pool before the next gold triple is judged, so no single extraction can satisfy two gold triples.
+\textbf{Triplet matching}. For every gold triple, we retrieve the extracted triplets AutoOntic produced from the same sentence and ask an LLM judge to select, if any, the one that expresses the same real-world fact as the gold triple, allowing for paraphrased relation wording and for subject and object being swapped (a grammatical inverse of the gold triple, e.g.\ \emph{X composed Y} vs.\ \emph{Y was composed by X}). The judge returns a matched index with direction \emph{same}, a matched index with direction \emph{inverse}, or no match. A matched extracted triple is removed from that sentence's candidate pool before the next gold triple is judged, so no single extraction can satisfy two gold triples.
 
-Gold triples are matched from the reference side outward, specifically so that an \emph{unmatched extracted triple} is never scored as a false positive. Text2KGBench uses curated relation vocabularies of roughly 15--20 relations per domain, while a schema-free pipeline may correctly extract true facts that are simply not encoded in the gold ontology. We therefore report the \emph{recall}, defined as the proportion of gold triples that are matched, and the \emph{extra rate}, defined as the proportion of extracted triples that remain unmatched after all gold triples have been processed. The extra rate is reported separately from recall to distinguish facts extracted beyond the gold annotations from failures to recover reference triples. We also report the \emph{direction breakdown}: the proportion of matched triples classified as \emph{same} versus \emph{inverse}. This provides an indirect check of OntoDisco's relation-direction resolution
+Gold triples are matched from the reference side outward, specifically so that an \emph{unmatched extracted triple} is never scored as a false positive. Text2KGBench uses curated relation vocabularies of roughly 15--20 relations per domain, while a schema-free pipeline may correctly extract true facts that are simply not encoded in the gold ontology. We therefore report the \emph{recall}, defined as the proportion of gold triples that are matched, and the \emph{extra rate}, defined as the proportion of extracted triples that remain unmatched after all gold triples have been processed. The extra rate is reported separately from recall to distinguish facts extracted beyond the gold annotations from failures to recover reference triples. We also report the \emph{direction breakdown}: the proportion of matched triples classified as \emph{same} versus \emph{inverse}. This provides an indirect check of AutoOntic's relation-direction resolution
 .
 
-\textbf{{Domain/Range Type Matching}}. For every matched pair, we compare the types that OntoDisco assigned to the extracted triple's subject and object with the gold relation's declared domain and range classes. The domain and range are swapped when the match direction is \emph{inverse}. A second LLM judge classifies each side as \textsc{Exact} (synonymous types), \textsc{More General} (OntoDisco's type is a broader category that subsumes the gold type), \textsc{More Narrow} (OntoDisco's type is a subtype of the gold type), or \textsc{Not Related}. We report the resulting \emph{type-judgment distribution} over matched pairs, with domain and range sides considered independently. This distinction is important because \textsc{More General} and \textsc{More Narrow} represent different failure modes of hierarchy induction: over-flattening versus over-fragmentation.
+\textbf{{Domain/Range Type Matching}}. For every matched pair, we compare the types that AutoOntic assigned to the extracted triple's subject and object with the gold relation's declared domain and range classes. The domain and range are swapped when the match direction is \emph{inverse}. A second LLM judge classifies each side as \textsc{Exact} (synonymous types), \textsc{More General} (AutoOntic's type is a broader category that subsumes the gold type), \textsc{More Narrow} (AutoOntic's type is a subtype of the gold type), or \textsc{Not Related}. We report the resulting \emph{type-judgment distribution} over matched pairs, with domain and range sides considered independently. This distinction is important because \textsc{More General} and \textsc{More Narrow} represent different failure modes of hierarchy induction: over-flattening versus over-fragmentation.
 % any triple whose judge call failed outright (\S\ref{sec:eval-reliability}).
 
 % \paragraph{Direction breakdown} reports the proportion of matches
@@ -450,7 +450,7 @@ Gold triples are matched from the reference side outward, specifically so that a
 % \label{sec:eval-qa}
 
 % The Text2KGBench evaluation above (\S\ref{sec:evaluation})
-% is \emph{intrinsic}: it scores extracted triplets and induced types directly against a gold ontology, independent of any downstream use. It does not test the claim motivating OntoDisco in the first place
+% is \emph{intrinsic}: it scores extracted triplets and induced types directly against a gold ontology, independent of any downstream use. It does not test the claim motivating AutoOntic in the first place
 % (\S\ref{sec:introduction}): that a typed, hierarchically organized KG
 % supports graph-based retrieval better than a flat one. We complement it
 % with an \emph{extrinsic} evaluation on multi-hop question answering, where
@@ -475,7 +475,7 @@ Gold triples are matched from the reference side outward, specifically so that a
 % previous hop; and a final LLM call answers the question from the
 % collected triplets alone. Wikontic canonicalizes entities and relations
 % \emph{per instance}, so retrieval is naturally scoped to one instance's
-% own small KG. OntoDisco canonicalizes \emph{across the whole corpus}
+% own small KG. AutoOntic canonicalizes \emph{across the whole corpus}
 % (\S\ref{sec:methods}), so this scoping is reconstructed explicitly: every
 % raw triplet is resolved to its canonical entity and relation identifiers
 % via the induced vocabularies, and retrieval and hop-walking are then
@@ -538,6 +538,8 @@ Averaged & 69.1 & 70.3 & 79.4 & 81.2 \\
 \resizebox{\columnwidth}{!}{%
 \begin{tabular}{llcccc}
 \toprule
+& & \multicolumn{3}{c}{Related} & Unrelated \\
+\cmidrule(lr){3-5} \cmidrule(lr){6-6}
 Model & Side & Exact & More Gen. & More Narrow & Not Rel. \\
 \midrule
 Qwen3-Next-80B & Domain & 51.0 & 30.5 & 9.9 & 8.6 \\
@@ -596,7 +598,7 @@ associated generated factual queries (1{,}500 in total). Every essay's triplets 
 pipeline once, yielding a single shared ontology and KG spanning all 100
 essays.
 
-\textbf{Task and method.} We mirror KGGen's own MINE evaluation methodology exactly, for direct comparability to its reported numbers on the same benchmark: each generated query is both the retrieval query and the fact to check for. Context is retrieved from OntoDisco's constructed KG via KGGen's own
+\textbf{Task and method.} We mirror KGGen's own MINE evaluation methodology exactly, for direct comparability to its reported numbers on the same benchmark: each generated query is both the retrieval query and the fact to check for. Context is retrieved from AutoOntic's constructed KG via KGGen's own
 method (sentence-embedding similarity over entities
 followed by a fixed-depth graph walk, top-$k=8$), and an LLM judge is asked
 a single binary question: whether the retrieved context contains the
@@ -624,7 +626,7 @@ both averaged over the whole benchmark and broken down per essay.
 \toprule
 Backbone & Accuracy (\%) \\
 \midrule
-OntoDisco, gpt-oss-120b & 73.93 \\
+AutoOntic, gpt-oss-120b & 73.93 \\
 KGGen, gpt-4o & 66 \\
 KGGen, Claude Sonnet 3.5 & 73 \\
 KGGen, Gemini 2.0 Flash & 44 \\
@@ -638,7 +640,7 @@ KGGen, Gemini 2.0 Flash & 44 \\
 \section{Results}
 \label{sec:results}
 
-Across intrinsic ontology evaluation (Text2KGBench, \S\ref{sec:results-text2kgbench}--\S\ref{sec:results-dbpedia}) and extrinsic retrieval evaluation (MINE, \S\ref{sec:results-mine}), OntoDisco's schema-free construction recovers a type hierarchy and canonical vocabulary that align substantially with independently-curated reference ontologies and that support effective downstream retrieval.
+Across intrinsic ontology evaluation (Text2KGBench, \S\ref{sec:results-text2kgbench}--\S\ref{sec:results-dbpedia}) and extrinsic retrieval evaluation (MINE, \S\ref{sec:results-mine}), AutoOntic's schema-free construction recovers a type hierarchy and canonical vocabulary that align substantially with independently-curated reference ontologies and that support effective downstream retrieval.
 
 \subsection{Text2KGBench}
 \label{sec:results-text2kgbench}
@@ -681,9 +683,9 @@ substantially wider.
 \subsection{MINE}
 \label{sec:results-mine}
 
-Table~\ref{tab:mine} reports overall accuracy on MINE (\S\ref{sec:eval-mine}). OntoDisco built with gpt-oss-120b reaches 73.93\% accuracy vs KGGen 66\% with gpt4o (1{,}109/1{,}500 queries). Unlike the Text2KGBench evaluation above, MINE does not score agreement with a reference schema directly. It queries the constructed KG through embedding-similarity retrieval and a fixed-depth graph walk over entities. So this result demonstrates that the typed, canonicalized KG built for a corpus with no supplied schema improves downstream retrieval.
+Table~\ref{tab:mine} reports overall accuracy on MINE (\S\ref{sec:eval-mine}). AutoOntic built with gpt-oss-120b reaches 73.93\% accuracy vs KGGen 66\% with gpt4o (1{,}109/1{,}500 queries). Unlike the Text2KGBench evaluation above, MINE does not score agreement with a reference schema directly. It queries the constructed KG through embedding-similarity retrieval and a fixed-depth graph walk over entities. So this result demonstrates that the typed, canonicalized KG built for a corpus with no supplied schema improves downstream retrieval.
 
-\paragraph{Ontology Quality.} Taken together, Tables~\ref{tab:text2kgbench-separate}--\ref{tab:mine} suggest OntoDisco's schema-free construction recovers a usable typed ontology. Domain/range disagreement with the reference ontology (Table~\ref{tab:text2kgbench-types}) is dominated by granularity mismatches (\textsc{More General}/\textsc{More Narrow}).  Unrelated types (\textsc{Not Related} stays under 9\% on the domain side and under 7\% on the range side. Together with MINE's retrieval accuracy, this is evidence that the induced hierarchy places types in approximately the right region of the ontology, and that this structure is usable for downstream retrieval, even where it does not converge on the exact reference granularity.
+\paragraph{Ontology Quality.} Taken together, Tables~\ref{tab:text2kgbench-separate}--\ref{tab:mine} suggest AutoOntic's schema-free construction recovers a usable typed ontology. Domain/range disagreement with the reference ontology (Table~\ref{tab:text2kgbench-types}) is dominated by granularity mismatches (\textsc{More General}/\textsc{More Narrow}).  Unrelated types (\textsc{Not Related} stays under 9\% on the domain side and under 7\% on the range side. Together with MINE's retrieval accuracy, this is evidence that the induced hierarchy places types in approximately the right region of the ontology, and that this structure is usable for downstream retrieval, even where it does not converge on the exact reference granularity.
 
 \section*{Limitations}
 
@@ -747,6 +749,60 @@ $\tau_{\text{hint}}$ & HINT confidence threshold (discard below) & 0.20 \\
 \label{tab:hyperparams}
 \end{table*}
 
+\section{Token Usage}
+\label{sec:appendix-tokens}
+
+Table~\ref{tab:appendix-tokens-text2kg} reports total prompt+completion
+tokens consumed by extraction (Step 0, \S\ref{sec:extraction}) and the
+five orchestrated pipeline steps (\S\ref{sec:methods}), summed across all
+domains, for each Text2KGBench condition reported in
+\S\ref{sec:results-text2kgbench}--\S\ref{sec:results-dbpedia}.
+Table~\ref{tab:appendix-tokens-mine} reports the same breakdown for the
+three MINE conditions in \S\ref{sec:results-mine}; the two gpt-oss-120b
+rows there reuse a single shared extraction pass, since they differ only
+in \texttt{max\_depth} over the same extracted corpus
+(\S\ref{sec:eval-mine}). Token counts are read directly from each run's
+own usage accounting (\S\ref{sec:reoccurring-design}); judge/evaluation
+token usage is not tracked by our evaluation scripts and is not included
+here.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+Condition & Extraction (M) & Pipeline (M) & Total (M) \\
+\midrule
+Wikidata-TekGen / Qwen3-Next-80B    & 4.71 & 3.84 & 8.55 \\
+Wikidata-TekGen / gpt-oss-120b      & 7.02 & 5.63 & 12.65 \\
+DBpedia-WebNLG / Qwen3-Next-80B     & 2.20 & 1.09 & 3.30 \\
+DBpedia-WebNLG / gpt-oss-120b       & 2.99 & 1.71 & 4.70 \\
+\bottomrule
+\end{tabular}
+\caption{Total tokens (prompt+completion, millions), summed across all
+domains, per Text2KGBench condition.}
+\label{tab:appendix-tokens-text2kg}
+\end{table}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+Condition & Extraction (M) & Pipeline (M) & Total (M) \\
+\midrule
+gpt-4o                        & 0.23 & 0.90 & 1.14 \\
+gpt-oss-120b, \texttt{max\_depth=50} & 0.44 & 2.13 & 2.57 \\
+gpt-oss-120b, \texttt{max\_depth=10} & 0.44 & 2.01 & 2.45 \\
+\bottomrule
+\end{tabular}
+\caption{Total tokens (prompt+completion, millions) for the three MINE
+conditions in \S\ref{sec:results-mine}. The two gpt-oss-120b rows share
+the same 0.44M-token extraction pass rather than each paying for it
+independently.}
+\label{tab:appendix-tokens-mine}
+\end{table}
+
 \section{Sentence Groundedness Analysis}
 \label{sec:appendix-groundedness}
 
@@ -765,7 +821,7 @@ Table~\ref{tab:text2kgbench-grounded} reports recall before and after this filte
 % reported in the original Text2KGBench study on this same subset
 % \citep{mihindukulasooriya2023text2kgbench}, though the two settings are
 % not directly comparable: the original task supplies the gold ontology and
-% asks for ontology-compliant extraction, while OntoDisco receives no
+% asks for ontology-compliant extraction, while AutoOntic receives no
 % ontology and induces its own schema from scratch.
 \begin{table}[t]
 \centering
