@@ -132,7 +132,14 @@
 \begin{document}
 \maketitle
 \begin{abstract}
-Graph-based retrieval-augmented generation depends on the quality of the knowledge graph (KG) it retrieves over, yet schema-free LLM-based extraction pipelines typically produce flat graphs: deduplicated entities and relations with no type hierarchy and no domain/range constraints. We present AutoOntic, a pipeline that extends schema-free KG construction with hyponymy-aware type canonicalization, a priority-ordered hierarchy induction procedure, entity deduplication gated by the induced hierarchy, and domain/range constraint mining. We evaluate AutoOntic both intrinsically, against the reference ontologies of Text2KGBench's Wikidata-TekGen and DBpedia-WebNLG subsets, and extrinsically, on downstream retrieval accuracy on the MINE benchmark. Across two LLM backbones, AutoOntic's induced types agree with the reference ontology's domain and range classes on a majority of matched relations, and where they disagree, the mismatch is overwhelmingly a matter of granularity rather than an unrelated branch of the induced hierarchy. On MINE, a knowledge graph built around AutoOntic's typed, hierarchically organized structure correctly answers a majority of retrieval queries. Beyond the pipeline itself, we propose an evaluation methodology for schema-free ontology induction that scores an induced hierarchy directly against a benchmark's own reference ontology.
+Graph-based retrieval-augmented generation depends on the quality of the knowledge graph (KG) it retrieves over, yet schema-free LLM-based extraction pipelines typically produce flat graphs: deduplicated entities and relations with no type hierarchy and no domain/range constraints.
+% We present AutoOntic, a pipeline that extends schema-free KG construction with hyponymy-aware type canonicalization, a priority-ordered hierarchy induction procedure, entity deduplication gated by the induced hierarchy, and domain/range constraint mining.
+We present AutoOntic, a pipeline that automatically constructs an
+ontology from text by canonicalizing open-vocabulary entity types and
+relations, inducing a hierarchy over the canonicalized types, and mining
+relation-level domain and range constraints. The induced hierarchy also
+guides entity deduplication during knowledge graph construction.
+We evaluate AutoOntic both intrinsically, against the reference ontologies of Text2KGBench's Wikidata-TekGen and DBpedia-WebNLG subsets, and extrinsically, on downstream retrieval accuracy on the MINE benchmark. Across two LLM backbones, AutoOntic's induced types agree with the reference ontology's domain and range classes on a majority of matched relations, and where they disagree, the mismatch is overwhelmingly a matter of granularity rather than an unrelated branch of the induced hierarchy. On MINE, a knowledge graph built around AutoOntic's typed, hierarchically organized structure correctly answers a majority of retrieval queries. Beyond the pipeline itself, we propose an evaluation methodology for schema-free ontology induction that scores an induced hierarchy directly against a benchmark's own reference ontology.
 \end{abstract}
 
 \begin{figure}[t]
@@ -759,51 +766,50 @@ tokens consumed by extraction (Step 0, \S\ref{sec:extraction}) and the
 five orchestrated pipeline steps (\S\ref{sec:methods}), summed across all
 domains, for each Text2KGBench condition reported in
 \S\ref{sec:results-text2kgbench}--\S\ref{sec:results-dbpedia}.
-Table~\ref{tab:appendix-tokens-mine} reports the same breakdown for the
-three MINE conditions in \S\ref{sec:results-mine}; the two gpt-oss-120b
-rows there reuse a single shared extraction pass, since they differ only
-in \texttt{max\_depth} over the same extracted corpus
-(\S\ref{sec:eval-mine}). Token counts are read directly from each run's
-own usage accounting (\S\ref{sec:reoccurring-design}); judge/evaluation
-token usage is not tracked by our evaluation scripts and is not included
-here.
+% Table~\ref{tab:appendix-tokens-mine} reports the same breakdown for the
+% three MINE conditions in \S\ref{sec:results-mine}; the two gpt-oss-120b
+% rows there reuse a single shared extraction pass, since they differ only
+% in \texttt{max\_depth} over the same extracted corpus
+% (\S\ref{sec:eval-mine}). Token counts are read directly from each run's
+% own usage accounting (\S\ref{sec:reoccurring-design}); judge/evaluation
+% token usage is not tracked by our evaluation scripts and is not included
+% here.
 
 \begin{table}[t]
 \centering
 \small
 \begin{tabular}{lrrr}
 \toprule
-Condition & Extraction (M) & Pipeline (M) & Total (M) \\
+Condition & Extraction & Pipeline\\
 \midrule
-Wikidata-TekGen / Qwen3-Next-80B    & 4.71 & 3.84 & 8.55 \\
-Wikidata-TekGen / gpt-oss-120b      & 7.02 & 5.63 & 12.65 \\
-DBpedia-WebNLG / Qwen3-Next-80B     & 2.20 & 1.09 & 3.30 \\
-DBpedia-WebNLG / gpt-oss-120b       & 2.99 & 1.71 & 4.70 \\
+TekGen / Qwen3-Next-80B    & 4.71 & 3.84 \\
+TekGen / gpt-oss-120b      & 7.02 & 5.63\\
+WebNLG / Qwen3-Next-80B     & 2.20 & 1.09\\
+WebNLG / gpt-oss-120b       & 2.99 & 1.71\\
 \bottomrule
 \end{tabular}
-\caption{Total tokens (prompt+completion, millions), summed across all
+\caption{Total tokens (prompt+completion, Millions), summed across all
 domains, per Text2KGBench condition.}
 \label{tab:appendix-tokens-text2kg}
 \end{table}
 
-\begin{table}[t]
-\centering
-\small
-\begin{tabular}{lrrr}
-\toprule
-Condition & Extraction (M) & Pipeline (M) & Total (M) \\
-\midrule
-gpt-4o                        & 0.23 & 0.90 & 1.14 \\
-gpt-oss-120b, \texttt{max\_depth=50} & 0.44 & 2.13 & 2.57 \\
-gpt-oss-120b, \texttt{max\_depth=10} & 0.44 & 2.01 & 2.45 \\
-\bottomrule
-\end{tabular}
-\caption{Total tokens (prompt+completion, millions) for the three MINE
-conditions in \S\ref{sec:results-mine}. The two gpt-oss-120b rows share
-the same 0.44M-token extraction pass rather than each paying for it
-independently.}
-\label{tab:appendix-tokens-mine}
-\end{table}
+% \begin{table}[t]
+% \centering
+% \small
+% \begin{tabular}{lrrr}
+% \toprule
+% Condition & Extraction (M) & Pipeline (M) & Total (M) \\
+% \midrule
+% gpt-oss-120b, \texttt{max\_depth=50} & 0.44 & 2.13 & 2.57 \\
+% gpt-oss-120b, \texttt{max\_depth=10} & 0.44 & 2.01 & 2.45 \\
+% \bottomrule
+% \end{tabular}
+% \caption{Total tokens (prompt+completion, millions) for the three MINE
+% conditions in \S\ref{sec:results-mine}. The two gpt-oss-120b rows share
+% the same 0.44M-token extraction pass rather than each paying for it
+% independently.}
+% \label{tab:appendix-tokens-mine}
+% \end{table}
 
 \section{Sentence Groundedness Analysis}
 \label{sec:appendix-groundedness}
