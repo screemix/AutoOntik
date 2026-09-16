@@ -1,22 +1,22 @@
-# configs/default.yaml
+# configs/gpt4o_openrouter.yaml
 #
-# Config for src/ontodisco/pipeline.py -- covers all five orchestrated steps:
-# Relation Canonicalization, Type Canonicalization, Hierarchy Induction,
-# Entity Deduplication, Constraint Induction. Extraction / Serialization are
-# not implemented yet and have no config section here.
+# Same hyperparameters as configs/gpt_oss.yaml, with the LLM client swapped
+# to gpt-4o via OpenRouter (+ PROXY_URL) instead of gpt-oss-120b via AIRI --
+# used to isolate backbone model as the only variable in the MINE
+# AutoOntic-vs-KGGen extraction-density comparison (see chat: does gpt-4o's
+# extraction density on this exact prompt/corpus differ from gpt-oss-120b's,
+# and does that change the MINE accuracy gap against KGGen).
 
-corpus_id: "my_corpus"
-input_path: "./data/musique_initial_triplets.jsonl"   # JSONL file, one raw triplet dict per line
-output_dir: "./output"
+corpus_id: "mine_benchmark_gpt4o"
+input_path: "./data/mine/triplets_gpt4o_rerun.jsonl"   # JSONL file, one raw triplet dict per line
+output_dir: "./output/mine"
 
 # ── LLM client ────────────────────────────────────────────────────────────────
 llm:
-  model: "Sber/GigaChat3.5-432B-A28B"
-  api_key_env: "AIRI_KEY"       # name of the env var holding the key -- never put the key itself here
-  base_url: "https://inference.airi.net:46783/v1"
-  proxy_key_env: null            # optional: name of the env var holding an HTTP(S) proxy URL, used for
-                                  # every LLM call this pipeline makes (extraction + all 5 steps); null
-                                  # (default) means no proxy -- a direct connection to base_url
+  model: "openai/gpt-4o"
+  api_key_env: "OPENROUTER_KEY"
+  base_url: "https://openrouter.ai/api/v1"
+  proxy_key_env: "PROXY_URL"
 
 # ── Embedding client ──────────────────────────────────────────────────────────
 embedding:
@@ -25,11 +25,6 @@ embedding:
   embed_batch_size: 64
 
 # ── Relation Canonicalization ─────────────────────────────────────────────────
-# Candidate clustering is HDBSCAN (dedup_base.cluster_hdbscan) over the full
-# pairwise cosine-distance matrix -- similarity_threshold sets HDBSCAN's
-# cluster_selection_epsilon. max_merge_rounds: embed->cluster->LLM-verify
-# passes (dedup_base.deduplicate_with_rounds), stopping early once a round
-# produces no further reduction in the canonical relation count.
 relation_canonicalization:
   similarity_threshold: 0.75
   max_merge_rounds: 20
@@ -41,11 +36,11 @@ relation_canonicalization:
 type_canonicalization:
   hac_threshold: 0.75          # HDBSCAN cluster_selection_epsilon = 1 - this (name kept for compatibility)
   relation_context_top_k: 5
-  max_merge_rounds: 20          # same convergence loop as relation_canonicalization above
+  max_merge_rounds: 20         # same convergence loop as relation_canonicalization above
   max_parallel_workers: 8
   max_cluster_size: 40
 
-# ── Hierarchy Induction ───────────────────────────────────────────────────────
+# ── Hierarchy Induction (current decomposed parent_check/child_check design) ──
 hierarchy:
   relation_signature_weighting: "ppmi"
   weeds_containment_threshold: 0.75
@@ -56,10 +51,10 @@ hierarchy:
   max_regroup_rounds: 3
   label_collision_threshold: 0.90
   max_child_claim_share: 0.6
-  max_depth: null                # null (YAML) / None (Python) means uncapped -- see hierarchy_induction.HierarchyConfig
+  max_depth: null              # null (YAML) / None (Python) means uncapped -- see hierarchy_induction.HierarchyConfig
   embed_batch_size: 64
-  context_max_examples: 10      # real corpus entity examples shown per type
-  context_max_subclasses: 5     # already-placed subclasses shown per type
+  context_max_examples: 10     # real corpus entity examples shown per type
+  context_max_subclasses: 5    # already-placed subclasses shown per type
   max_parallel_workers: 8      # thread pool size for band 2+ (band 1 always runs sequentially)
 
 # ── Entity Deduplication + Class Assignment ───────────────────────────────────

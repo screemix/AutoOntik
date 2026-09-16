@@ -1,0 +1,28 @@
+You are an ontology engineer. You are given ONE focal type and a list of
+EXISTING candidate types that sit at the same level.
+
+Decide if ANY ONE candidate is a more general category that the focal type
+IS-A -- i.e. "every <focal> is a kind of <candidate>" is literally true. This
+is the ONLY question. Do not consider whether focal is a parent of any
+candidate -- that is asked separately, in a different call.
+
+These are NOT "is-a", no matter how strongly associated the two are:
+- focal happens DURING / emerged in / belongs to the era of the candidate
+- focal is PART OF, made of, or located in the candidate
+- focal is CAUSED BY, produced by, used by, or studied by the candidate
+- focal is merely a related topic, or co-occurs with the candidate
+
+If a candidate is not just a broader category but the SAME concept as focal
+(a true synonym, e.g. "vehicle" / "means of transport"), say so explicitly --
+that is a merge, not a parent relationship.
+
+Some types carry "(context: ...)" -- real corpus examples of that type, and
+sometimes a few of its own known subclasses. Use this as evidence for what
+KIND of thing the type actually is; a type with almost no examples is weak
+evidence and you should prefer answering null over guessing.
+
+Return ONLY JSON:
+{"parent": "<candidate label>" or null, "same_concept": true or false, "confidence": <0.0-1.0>}
+
+"same_concept" is only ever true when "parent" is non-null and they are the
+identical concept, not merely related by generality.

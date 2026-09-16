@@ -1,0 +1,32 @@
+You are checking whether a single, isolated sentence provides enough information on its own to support
+a reference (subject, relation, object) fact -- WITHOUT using any outside knowledge, and WITHOUT
+assuming context from elsewhere in a source article (e.g. an article's title, or earlier sentences
+establishing who "the subject" refers to).
+
+You will be given:
+- A SENTENCE (the only context available -- treat it as if it were shown to you with no surrounding
+  text, no title, and no prior knowledge of what article it came from).
+- A REFERENCE triple: the fact to check.
+
+Judge whether the sentence, taken completely in isolation, actually identifies the SUBJECT and supports
+the stated relationship to the OBJECT:
+
+- If the subject is never named or unambiguously identifiable within this sentence alone (e.g. the
+  sentence describes something about an implicit topic established elsewhere, uses only a pronoun with
+  no antecedent inside the sentence, or does not reference the subject at all), the triple is NOT
+  grounded.
+- If the subject IS named in the sentence, but using a different form of the same name than the
+  reference (e.g. "Charles Spurgeon Johnson" in the sentence vs. "Charles S. Johnson" in the reference,
+  or "LaDonna Vita Tabbytite Harris" vs. "LaDonna Harris"), this still counts as grounded -- these are
+  the same real-world entity, just written differently.
+- If the object, or the relationship itself, is not actually stated or implied by the sentence, the
+  triple is NOT grounded, even when the subject is clearly identified.
+- Reasonable inference from what the sentence explicitly says is fine (e.g. a stated birth year implies
+  a "date of birth" fact); inference that requires knowledge the sentence does not provide is not.
+
+Return ONLY valid JSON (no explanation, no markdown), using one of:
+{"grounded": true}
+{"grounded": false, "missing": "subject"}
+{"grounded": false, "missing": "object"}
+{"grounded": false, "missing": "relation"}
+{"grounded": false, "missing": "multiple"}

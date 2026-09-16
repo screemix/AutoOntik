@@ -1,13 +1,36 @@
 You are an ontology engineer. You are given ONE new/focal type and a short list of
-EXISTING candidate types. Decide how the focal type relates to AT MOST ONE of the
+EXISTING candidate types. Decide how the focal type relates to the
 candidates -- if none of them relate to it in a meaningful hierarchical way, say so.
 
 Some types are annotated with "(context: ...)", listing the canonical relations they
-most often participate in -- use this as evidence, not as ground truth.
+most often participate in. Use this ONLY to tell apart two types you would otherwise
+confuse -- it is weak evidence, not ground truth.
+
+CO-OCCURRENCE IS NOT SUBSUMPTION. The context lists what a type is TALKED ABOUT
+WITH, which in most corpora is dominated by narrative verbs ("emerged in", "began",
+"spread", "development", "used by"). Two types sharing such relations tells you they
+appear in the same stories -- NOT that one is a kind of the other. Never infer a
+hierarchy relation from overlapping context alone.
 
 IMPORTANT: candidates (and the focal type) may themselves be abstractions formed
 earlier in this same process (not raw corpus surface forms) -- treat them exactly
 like any other candidate.
+
+### The only test for parent/child
+
+X IS-A Y means: **every single X is a kind of Y**, and you could say "an X is a Y"
+and have it be literally true. Nothing weaker counts.
+
+These are NOT IS-A, no matter how strongly the two types are associated:
+- X happens DURING / emerged in / belongs to the era of Y
+  ("language" is not a kind of "historical period"; "currency" is not a kind of
+   "century"; "food" is not a kind of "era")
+- X is PART OF Y, or made of Y, or located in Y
+- X is CAUSED BY, produced by, used by, or studied by Y
+- X is merely a related topic, or appears in the same documents as Y
+
+If you cannot say "every X is a kind of Y" without hesitating, the answer is not
+"parent" or "child".
 
 Choose EXACTLY ONE of these five relations:
 
@@ -15,10 +38,16 @@ Choose EXACTLY ONE of these five relations:
    (focal type IS-A candidate). Name that one candidate.
 2. "child" -- the focal type is a more general type that subsumes ONE OR MORE of
    the candidates (each named candidate IS-A focal type). Use this when the focal
-   type should become the parent of one or more of the listed candidates. If more
-   than one candidate belongs under the focal type, name ALL of them together in
-   this single response -- do not report only one and rely on a later call to
-   catch the rest, since a later call may never re-examine this same candidate.
+   type should become the parent of one or more of the listed candidates.
+   Apply the IS-A test to EACH candidate SEPARATELY: name a candidate only if
+   "every <candidate> is a kind of <focal>" is literally true on its own. Genuine
+   multi-child cases are real but UNCOMMON and usually involve two or three closely
+   related candidates ("war film" and "action film" under "film genre"). If you find
+   yourself naming most of the list, you are answering "which of these are related to
+   me?" instead of "which of these are kinds of me?" -- re-apply the test and name only
+   those that truly pass, or answer "none". When several candidates genuinely do pass,
+   name them all here rather than relying on a later call, which may never re-examine
+   this same candidate.
 3. "same_concept" -- the focal type and ONE candidate are the IDENTICAL concept,
    just worded differently (e.g. "vehicle" / "means of transport"). Not a
    hierarchy relationship -- they should be merged into one. Name that one

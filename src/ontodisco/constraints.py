@@ -92,6 +92,15 @@ class ConstraintConfig:
     hard_threshold: float = 0.90
     soft_threshold: float = 0.50
     hint_threshold: float = 0.20
+    min_support_for_hard: int = 3   # a (domain, range) pair seen on fewer than this many triples can
+                                     # never be HARD, however high its pca_confidence. A relation
+                                     # observed ONCE gives support=1/total=1 -> confidence 1.0 -> HARD,
+                                     # which encodes "this relation is rare", not "this constraint is
+                                     # certain": measured on MINE, 78% of HARD constraints (343/440)
+                                     # rested on a single triple. Such a pair is demoted one tier to
+                                     # SOFT rather than discarded -- the observation is real, just not
+                                     # strong enough to bear a hard constraint. Set to 1 to restore
+                                     # the pre-min-support behaviour.
 
 
 @dataclass
@@ -278,9 +287,11 @@ def _generalize_to_signature_map(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _assign_strength(
-    pca_confidence: float, config: ConstraintConfig,
+    pca_confidence: float, config: ConstraintConfig, support: int = None,
 ) -> Optional[ConstraintStrength]:
     if pca_confidence >= config.hard_threshold:
+        if support is not None and support < config.min_support_for_hard:
+            return ConstraintStrength.SOFT
         return ConstraintStrength.HARD
     if pca_confidence >= config.soft_threshold:
         return ConstraintStrength.SOFT
@@ -362,7 +373,7 @@ def induce_constraints(
 
         for (domain_type_id, range_type_id), support in joint_support.items():
             pca_confidence = support / total
-            strength = _assign_strength(pca_confidence, config)
+            strength = _assign_strength(pca_confidence, config, support=support)
             if strength is None:
                 n_discarded += 1
                 logger.debug(

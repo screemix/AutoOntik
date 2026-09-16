@@ -79,7 +79,23 @@ class ContrieverEmbedder:
         self.device = device
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name, use_safetensors=True, trust_remote_code=True, token=os.getenv("HF_KEY")).to(self.device)
+        # Prefer safetensors, but don't make the whole pipeline depend on HF's
+        # safetensors-convert Space being up: when a cached revision ships only
+        # pytorch_model.bin, use_safetensors=True makes transformers POST to
+        # that Space and parse its response, which fails with an opaque
+        # JSONDecodeError whenever the service is down or rate-limiting --
+        # aborting a multi-hour run before the first LLM call. Fall back to the
+        # already-cached .bin weights instead.
+        load_kwargs = dict(trust_remote_code=True, token=os.getenv("HF_KEY"))
+        try:
+            self.model = AutoModel.from_pretrained(model_name, use_safetensors=True, **load_kwargs)
+        except Exception as exc:
+            logger.warning(
+                "Loading %s with use_safetensors=True failed (%s: %s); retrying without it",
+                model_name, type(exc).__name__, exc,
+            )
+            self.model = AutoModel.from_pretrained(model_name, **load_kwargs)
+        self.model = self.model.to(self.device)
         self.model.eval()
         self.api_key = os.getenv("HF_KEY")
 
@@ -143,9 +159,8 @@ def cluster_hdbscan(
     min_samples: int = 1,
 ) -> np.ndarray:
     """
-    Cluster embeddings using HDBSCAN, parameterised to approximate the same
-    "merge if cosine similarity >= threshold" semantics the HAC/FAISS
-    candidate generation this replaced used, while additionally letting
+    Cluster embeddings using HDBSCAN, parameterised to approximate the
+    "merge if cosine similarity >= threshold" semantics, while additionally letting
     variable-density substructure *within* that threshold band form separate
     clusters instead of one fixed global cut.
 
@@ -232,27 +247,30 @@ def _parse_cluster_response(
     anything -- HDBSCAN partitions each round's pool labels across clusters,
     so if every cluster's own output is bounded by its own input size, the
     round's total output is bounded by the round's total input, and pool
-    size can only shrink or hold steady, never grow. (A single cluster
-    ballooning past its own input size, e.g. from double-counting a
-    malformed LLM group once per occurrence instead of once per response,
-    was the actual cause of a pool GROWING round over round in practice --
-    caught and fixed here rather than left as an incidental property. A
-    member listed in TWO groups by a malformed response is the same
-    ballooning failure mode at the member level rather than the group level
-    -- first group to claim a member wins, later duplicates are dropped, not
-    silently double-counted. This matters more once verify_clusters_with_llm's
-    oversized-cluster stitching reuses this same function: there, one
-    "member" being duplicated is a whole sub-batch's worth of real original
-    members, not just one.)
+    size can only shrink or hold steady, never grow. .)
     """
+    # UNVERIFIED CLUSTERS MUST NOT MERGE. HDBSCAN is candidate GENERATION, not a
+    # merge decision -- it groups by embedding proximity, which for e.g. country
+    # names or person names is high across genuinely distinct entities. The LLM
+    # call is the only thing that ever decides "these are the same". So when that
+    # call fails or its response can't be parsed, the honest outcome is "unknown",
+    # and this module's stated policy (see cluster_entity_names.txt: "when in
+    # doubt, keep entities SEPARATE") makes the safe direction SPLIT, not merge.
+
     if exc is not None:
-        logger.exception("LLM verification failed for cluster %s, keeping HDBSCAN grouping", cluster_id, exc_info=exc)
-        return [(members[0], members)]
+        logger.exception(
+            "LLM verification failed for cluster %s (%d members), keeping them SEPARATE "
+            "(unverified clusters are never merged)", cluster_id, len(members), exc_info=exc,
+        )
+        return [(m, [m]) for m in members]
 
     if not groups:
         if groups is not None:
-            logger.warning("Could not parse LLM response for cluster %s, keeping HDBSCAN grouping", cluster_id)
-        return [(members[0], members)]
+            logger.warning(
+                "Could not parse LLM response for cluster %s (%d members), keeping them SEPARATE",
+                cluster_id, len(members),
+            )
+        return [(m, [m]) for m in members]
 
     # Validate every group up front -- a single malformed group (missing
     # canonical_label/members) makes the whole response's structure
@@ -263,8 +281,11 @@ def _parse_cluster_response(
     # unconditional instead of merely typical.
     for group in groups:
         if not group.get("canonical_label") or not group.get("members"):
-            logger.warning("Could not parse LLM response for cluster %s, keeping HDBSCAN grouping", cluster_id)
-            return [(members[0], members)]
+            logger.warning(
+                "Malformed group in LLM response for cluster %s (%d members), keeping them SEPARATE",
+                cluster_id, len(members),
+            )
+            return [(m, [m]) for m in members]
 
     result: list[tuple[str, list[str]]] = []
     claimed: set[str] = set()
@@ -305,12 +326,16 @@ def _parse_cluster_response(
         # groups took (e.g. hallucinated extra groups with no real
         # members), never let this cluster's own output exceed its own
         # input size -- see the guarantee in the docstring above.
+        # Same direction rule as the failure paths above, and if anything more
+        # clear-cut: a response with MORE groups than members was splitting
+        # aggressively, so collapsing it into one merged item inverts the only
+        # signal the LLM actually gave. Keep them separate.
         logger.warning(
             "LLM response for cluster %s produced %d groups from %d input members "
-            "(more groups than members); keeping HDBSCAN grouping instead",
+            "(more groups than members); keeping them SEPARATE",
             cluster_id, len(result), len(members),
         )
-        return [(members[0], members)]
+        return [(m, [m]) for m in members]
 
     return result
 
@@ -345,11 +370,7 @@ def verify_clusters_with_llm(
     placement. Singleton clusters never reach the pool (no LLM call needed).
 
     max_cluster_size: size-capping + stitching for oversized post-merge
-    clusters (CLAUDE.md §5's "planned extension", implemented here so it
-    applies to relation/type/entity dedup alike, since all three funnel
-    through this one function). Nothing upstream (HDBSCAN, or a
-    cluster_postprocess_fn like relation_context.merge_clusters_by_relation_
-    signature) caps how large a single cluster can grow -- a cluster well
+    clusters cap how large a single cluster can grow -- a cluster well
     past this size produces an oversized prompt that's slow and whose JSON
     response the LLM is prone to truncating, silently dropping members into
     accidental singletons rather than making a real merge/split call on
@@ -499,12 +520,7 @@ def verify_clusters_with_llm(
             # max_cluster_size labels (e.g. 2249 members -> 57 sub-batches ->
             # 1050 surviving labels). Forcing all of them through one stitch
             # call recreates exactly the oversized/slow/truncation-prone
-            # call this whole mechanism exists to avoid. A stitch pool this
-            # large also means most of the original cluster wasn't actually
-            # duplicated -- HDBSCAN over-clustered upstream (CLAUDE.md L3),
-            # not a case of a merge lost at an unlucky split boundary. Skip
-            # stitching outright rather than force it: keep the sub-batch
-            # groups separate.
+            # call this whole mechanism exists to avoid. 
             logger.warning(
                 "Cluster %s: size %d over max_cluster_size=%d, split into %d sub-batches -> "
                 "%d surviving sub-groups, which itself exceeds max_cluster_size -- skipping "

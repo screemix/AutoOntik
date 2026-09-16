@@ -66,6 +66,11 @@ def _already_done(output_path: Path) -> set[int]:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--retry-passes", type=int, default=2,
+                        help="Extra full passes over essays that failed, before giving up on them. "
+                             "A permanently-skipped essay contributes ZERO triplets, so every query "
+                             "about it scores near 0: on the gpt-4o-mini run, 6 skipped essays cost "
+                             "90 of 1500 queries (6%% of MINE) and ~3.5 accuracy points.")
     parser.add_argument("--essays", default="data/mine/essays.json")
     parser.add_argument("--output", default="data/mine/triplets.jsonl")
     parser.add_argument("--config", default="configs/gpt_oss.yaml",
@@ -93,8 +98,18 @@ def main():
 
     num_triplets_written = 0
     num_failed = 0
+    pending = [e for e in essays if e["id"] not in done_ids]
+    failed_essays: list = []
     with open(output_path, "a", encoding="utf-8") as out_f:
-        for essay in essays:
+      for _pass in range(args.retry_passes + 1):
+        if _pass:
+            if not failed_essays:
+                break
+            logger.info("Retry pass %d/%d over %d essay(s) that failed: %s",
+                        _pass, args.retry_passes, len(failed_essays),
+                        [e["id"] for e in failed_essays])
+            pending, failed_essays = failed_essays, []
+        for essay in pending:
             essay_id = essay["id"]
             if essay_id in done_ids:
                 continue
@@ -111,13 +126,13 @@ def main():
             try:
                 result = extractor.extract_triplets_from_text(essay["content"])
             except Exception:
-                logger.exception("Extraction failed for essay %s, skipping", essay_id)
-                num_failed += 1
+                logger.exception("Extraction failed for essay %s, queued for retry", essay_id)
+                failed_essays.append(essay)
                 continue
 
             if not isinstance(result, dict) or "triplets" not in result:
-                logger.warning("Essay %s: unparseable extraction response, skipping", essay_id)
-                num_failed += 1
+                logger.warning("Essay %s: unparseable extraction response, queued for retry", essay_id)
+                failed_essays.append(essay)
                 continue
 
             triplets = result["triplets"]
@@ -129,8 +144,17 @@ def main():
                 out_f.write(json.dumps(triplet, ensure_ascii=False) + "\n")
             out_f.flush()
             num_triplets_written += len(triplets)
+            done_ids.add(essay_id)
             logger.info("Essay %s: extracted %d triplets (running total: %d)",
                         essay_id, len(triplets), num_triplets_written)
+
+    num_failed = len(failed_essays)
+    if failed_essays:
+        logger.error(
+            "%d essay(s) STILL failed after %d retry pass(es) and contribute NO triplets: %s -- "
+            "every benchmark query about them will score ~0",
+            num_failed, args.retry_passes, [e["id"] for e in failed_essays],
+        )
 
     prompt_tokens, completion_tokens = extractor.calculate_used_tokens()
     logger.info(

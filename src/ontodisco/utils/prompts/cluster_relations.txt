@@ -11,4 +11,4 @@ If merging all into one relation:
 {"decision": "merge", "groups": [{"canonical_label": "...", "members": ["...", ...]}]}
 
 If splitting into multiple relations:
-{"decision": "split", "groups": [{"canonical_label": "...", "members": ["...", ...]}, ...]}"""
+{"decision": "split", "groups": [{"canonical_label": "...", "members": ["...", ...]}, ...]}

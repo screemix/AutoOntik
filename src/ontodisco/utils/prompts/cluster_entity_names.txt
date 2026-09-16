@@ -1,16 +1,29 @@
-You are a knowledge graph engineer. Below is a group of entity mentions, each in the format "name [type]". These have been clustered together based on embedding similarity.
+You are a knowledge graph engineer. Below is a group of entity mentions, each in the format "name [type]". These were clustered together by embedding similarity ONLY — being in this list is NOT evidence that they are the same entity. Most clusters contain several DIFFERENT entities that merely sound alike or share a type.
 
 Your task:
-1. Decide which mentions refer to the SAME real-world entity.
-2. Group mentions of the same entity together.
-3. For each group, choose the BEST canonical name — the most complete, unambiguous form of the entity name. The canonical name must be JUST the entity name, WITHOUT the [type] bracket.
+1. Decide which mentions are SYNONYMOUS: different ways of writing the SAME single real-world entity.
+2. Group synonymous entities together. A mention with no synonym forms its own group of one.
+3. For each group, choose the BEST canonical name — the most complete, unambiguous form of that entity's name, taken from the mentions themselves. The canonical name must be JUST the entity name, WITHOUT the [type] bracket.
 4. Each group's "members" array must contain the EXACT compound strings as provided (including the [type] part).
 
-IMPORTANT RULES:
-- Two mentions with DIFFERENT types usually refer to DIFFERENT entities (e.g., "Paris [city]" vs "Paris [person]" are two different entities).
-- Two mentions with SIMILAR types may refer to the same entity (e.g., "Christopher Nolan [film director]" and "Chris Nolan [filmmaker]" are the same person).
-- Abbreviations, nicknames, and partial names should be merged with their full form ONLY if the type context supports it.
-- When in doubt, keep entities SEPARATE (prefer precision over recall).
+### The test for a duplicate
 
-Return ONLY valid JSON (no explanation, no markdown):
+Two mentions are SYNONYMOUS ONLY if they are denoting the same person, organization, place, work, event, or concept — such that **every statement true of one is true of the other**, and merging them would LOSE NO INFORMATION.
+
+Apply it by substitution: if you swapped one mention for the other in a sentence, would the meaning stay identical?
+- "Chris Nolan" / "Christopher Nolan" — identical meaning. SYNONYMOUS.
+- "Nobel Prize" / "Nobel Prize in Physics" — one is the award family, the other a specific award. Merging discards "in Physics". NOT SYNONYMOUS.
+
+### Type rules
+
+- SIMILAR types allow merging only if the entity name, combined with the type, refers to the same real-world entity ("Christopher Nolan [film director]" / "Chris Nolan [filmmaker]" / "Nolan [human]").
+- Abbreviations, nicknames, spelling and case variants, and partial names merge with their full form when the type context supports it.
+
+### Do not invent a name
+
+The canonical name must be one of the given mentions (or its fuller spelling). Never invent a broader umbrella term to cover a group — if you find yourself reaching for a general word that covers several mentions, that is proof they are NOT duplicates and must stay separate.
+
+When in doubt, keep entities SEPARATE. Precision matters far more than recall here: a wrong merge destroys two entities permanently, while a missed merge leaves both intact.
+
+Return ONLY valid JSON (no explanation, no markdown). Every input mention must appear in exactly one group:
 {"groups": [{"canonical_label": "<just the name>", "members": ["<name [type]>", ...]}, ...]}

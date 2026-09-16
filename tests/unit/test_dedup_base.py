@@ -77,8 +77,10 @@ class _FlakyLLMVerifier:
 
 def test_verify_clusters_with_llm_isolates_exceptions_per_cluster():
     """One cluster's LLM call failing must not affect any other cluster's
-    result -- the failing cluster falls back to keeping its HDBSCAN grouping
-    as-is (same fallback as the pre-parallel sequential code)."""
+    result. The failing cluster falls back to SINGLETONS -- never a wholesale
+    merge of its unverified HDBSCAN grouping: HDBSCAN is candidate generation,
+    and only the LLM call decides identity, so a failed call means "unknown"
+    and the safe direction is split (see _resolve_cluster_groups)."""
     clusters = {
         0: ["x1", "x2"],
         1: ["y1", "y2", "y3"],
@@ -89,8 +91,14 @@ def test_verify_clusters_with_llm_isolates_exceptions_per_cluster():
 
     by_canonical = {g[0]: g[1] for g in verified_groups}
     assert by_canonical["x1"] == ["x1", "x2"], "unaffected cluster must still verify normally"
-    assert by_canonical["y1"] == ["y1", "y2", "y3"], (
-        "failing cluster must fall back to its original HDBSCAN grouping, not be dropped"
+    assert by_canonical["y1"] == ["y1"], (
+        "a cluster whose LLM verification failed must fall back to singletons, "
+        "not be merged wholesale on unverified embedding proximity"
+    )
+    assert by_canonical["y2"] == ["y2"]
+    assert by_canonical["y3"] == ["y3"]
+    assert {"y1", "y2", "y3"} <= set(by_canonical), (
+        "no member of a failed cluster may be dropped -- each survives as its own entity"
     )
 
 

@@ -340,6 +340,57 @@ def summarize(results: list[dict], total_generated: int, *, ontology_id, judge_m
 #  Main
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _load_existing_results(output_path: Path) -> list[dict]:
+    """Resume support: if --output already exists (a previous run was
+    interrupted, e.g. by an API account running out of credits mid-domain),
+    return its per_sentence results so already-judged sentences aren't
+    re-paid-for. Returns [] if the file doesn't exist or can't be parsed
+    (a truncated/corrupt partial write from a hard kill -- better to redo
+    that one file's sentences than crash on it)."""
+    if not output_path.exists():
+        return []
+    try:
+        with open(output_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("per_sentence", [])
+    except (json.JSONDecodeError, OSError):
+        logger.warning("Could not parse existing %s, starting fresh", output_path)
+        return []
+
+
+def _write_output(
+    results: list[dict], ground_truth: list[dict], buckets: dict, args, output_path: Path,
+) -> dict:
+    """Compute overall + by_domain summaries from `results` and write the
+    full output file. Called periodically during judging (not just once at
+    the end) so a mid-run interruption -- e.g. an API account running out
+    of credits -- leaves a valid, already-resumable file on disk instead of
+    losing every dollar spent so far."""
+    overall_ontology_id = args.ontology_ids[0] if len(args.ontology_ids) == 1 else "+".join(args.ontology_ids)
+    overall_summary = summarize(
+        results, total_generated=sum(len(b) for b in buckets.values()),
+        ontology_id=overall_ontology_id, judge_model=args.judge_model,
+    )
+
+    by_domain = {}
+    for ontology_id in args.ontology_ids:
+        domain_sentence_ids = {r["id"] for r in ground_truth if r["_source_ontology_id"] == ontology_id}
+        domain_results = [r for r in results if r["sentence_id"] in domain_sentence_ids]
+        domain_total_generated = sum(len(buckets.get(sid, [])) for sid in domain_sentence_ids)
+        by_domain[ontology_id] = summarize(
+            domain_results, total_generated=domain_total_generated,
+            ontology_id=ontology_id, judge_model=args.judge_model,
+        )
+
+    output = {"overall": overall_summary, "by_domain": by_domain, "per_sentence": results}
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(output, f, indent=2, ensure_ascii=False)
+    tmp_path.replace(output_path)  # atomic on POSIX -- never leaves a half-written judge_results.json
+    return {"overall": overall_summary, "by_domain": by_domain}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--triplets", required=True,
@@ -404,40 +455,48 @@ def main():
         raise RuntimeError(f"Environment variable {args.judge_api_key_env!r} is not set")
     extractor = LLMTripletExtractor(api_key=api_key, model=args.judge_model, base_url=args.judge_base_url)
 
+    output_path = Path(args.output)
+    loaded = _load_existing_results(output_path)
+    # A sentence that hit call failures (e.g. every remaining call failing
+    # once an account runs out of credits) still gets a result dict back
+    # from _judge_sentence -- it doesn't raise. Treating that as "done"
+    # would permanently lock in a call-failure result instead of retrying
+    # it once the underlying issue (credits, rate limit, ...) is fixed, so
+    # only clean (zero call-failure) sentences count as already judged.
+    results = [r for r in loaded if r.get("call_failures", 0) == 0]
+    done_ids = {r["sentence_id"] for r in results}
+    if loaded:
+        logger.info("Resuming: %d/%d sentences already judged cleanly, %d had call failures and will "
+                    "be retried, %d remaining", len(done_ids), len(ground_truth),
+                    len(loaded) - len(done_ids), len(ground_truth) - len(done_ids))
+
     tasks = [
         (record, buckets.get(record["id"], []), ontologies[record["_source_ontology_id"]])
-        for record in ground_truth
+        for record in ground_truth if record["id"] not in done_ids
     ]
 
-    results = []
-    with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
-        futures = {
-            executor.submit(_judge_sentence, record, bucket, ontology, extractor): record["id"]
-            for record, bucket, ontology in tasks
-        }
-        completed = 0
-        for future in as_completed(futures):
-            completed += 1
-            results.append(future.result())
-            if completed % 25 == 0 or completed == len(futures):
-                logger.info("Judged %d/%d sentences", completed, len(futures))
+    # Checkpointed periodically (not just once at the end): an API account
+    # running out of credits mid-run (a real, observed failure mode) must
+    # not lose every dollar of judging already paid for -- see
+    # _write_output's docstring and _load_existing_results above, which is
+    # what makes re-running this exact command afterward a resume rather
+    # than a full re-judge from scratch.
+    if tasks:
+        with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+            futures = {
+                executor.submit(_judge_sentence, record, bucket, ontology, extractor): record["id"]
+                for record, bucket, ontology in tasks
+            }
+            completed = 0
+            for future in as_completed(futures):
+                completed += 1
+                results.append(future.result())
+                if completed % 25 == 0 or completed == len(futures):
+                    logger.info("Judged %d/%d sentences", completed, len(futures))
+                    _write_output(results, ground_truth, buckets, args, output_path)
 
-    # ── Aggregate: overall (every domain pooled) + one summary per domain ────
-    overall_ontology_id = args.ontology_ids[0] if len(args.ontology_ids) == 1 else "+".join(args.ontology_ids)
-    overall_summary = summarize(
-        results, total_generated=sum(len(b) for b in buckets.values()),
-        ontology_id=overall_ontology_id, judge_model=args.judge_model,
-    )
-
-    by_domain = {}
-    for ontology_id in args.ontology_ids:
-        domain_sentence_ids = {r["id"] for r in ground_truth if r["_source_ontology_id"] == ontology_id}
-        domain_results = [r for r in results if r["sentence_id"] in domain_sentence_ids]
-        domain_total_generated = sum(len(buckets.get(sid, [])) for sid in domain_sentence_ids)
-        by_domain[ontology_id] = summarize(
-            domain_results, total_generated=domain_total_generated,
-            ontology_id=ontology_id, judge_model=args.judge_model,
-        )
+    summaries = _write_output(results, ground_truth, buckets, args, output_path)
+    overall_summary, by_domain = summaries["overall"], summaries["by_domain"]
 
     total_call_failures = overall_summary["total_call_failures"]
     total_gold = overall_summary["total_gold_triples"]
@@ -448,16 +507,11 @@ def main():
     if total_call_failures:
         logger.error(
             "%d/%d judge calls FAILED (excluded from recall, NOT counted as misses). "
-            "If this is a large fraction, check --config's judge model/base_url/api key "
-            "before trusting the recall number.",
+            "If this is a large fraction (e.g. an account ran out of credits mid-run), fix the "
+            "underlying cause and re-run this exact command -- already-judged sentences resume "
+            "instead of being re-paid-for, but the sentences that hit call failures will be retried.",
             total_call_failures, total_gold,
         )
-
-    output = {"overall": overall_summary, "by_domain": by_domain, "per_sentence": results}
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(output, f, indent=2, ensure_ascii=False)
 
     recall = overall_summary["recall_excl_call_failures"]
     logger.info(

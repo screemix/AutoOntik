@@ -5,13 +5,22 @@
 # Entity Deduplication, Constraint Induction. Extraction / Serialization are
 # not implemented yet and have no config section here.
 
-corpus_id: "my_corpus"
-input_path: "./data/musique_initial_triplets.jsonl"   # JSONL file, one raw triplet dict per line
+corpus_id: "clinrecs"
+input_path: "./data/clinrecs_triplets.jsonl"   # JSONL file, one raw triplet dict per line -- produced by
+                                                # scripts/clinrecs/extract_triplets.py, NOT the raw
+                                                # data/clinrecs_chunked.jsonl (that's pre-extraction text
+                                                # chunks; see scripts/clinrecs/convert_ids.py + extract_triplets.py)
+language: "ru"                                 # clinrecs is Russian-language clinical guidance --
+                                                # this selects each step's Russian prompt variant
+                                                # (e.g. hierarchy_pairwise_action_ru.txt) so newly
+                                                # synthesized labels/definitions come out in Russian
+                                                # too, matching the already-Russian extracted triplets.
 output_dir: "./output"
+
 
 # ── LLM client ────────────────────────────────────────────────────────────────
 llm:
-  model: "Sber/GigaChat3.5-432B-A28B"
+  model: "Qwen/Qwen3-Next-80B-A3B-Instruct"
   api_key_env: "AIRI_KEY"       # name of the env var holding the key -- never put the key itself here
   base_url: "https://inference.airi.net:46783/v1"
   proxy_key_env: null            # optional: name of the env var holding an HTTP(S) proxy URL, used for
@@ -51,15 +60,11 @@ hierarchy:
   weeds_containment_threshold: 0.75
   priority_band_tolerance: 10  # nodes within this many in-degree units of a band's top score share it
   seed_roots: []              # e.g. ["Endurant", "Perdurant", "Quality", "Abstract"] for a DOLCE-seeded run
-  candidate_batch_size: 30      # cap on a level's size AND the trigger threshold for regrouping it
-  max_regroup_input: 90
-  max_regroup_rounds: 3
-  label_collision_threshold: 0.90
-  max_child_claim_share: 0.6
+  candidate_batch_size: 30
+  max_escalation_batches: 3
   max_depth: null                # null (YAML) / None (Python) means uncapped -- see hierarchy_induction.HierarchyConfig
   embed_batch_size: 64
-  context_max_examples: 10      # real corpus entity examples shown per type
-  context_max_subclasses: 5     # already-placed subclasses shown per type
+  context_top_k: 5
   max_parallel_workers: 8      # thread pool size for band 2+ (band 1 always runs sequentially)
 
 # ── Entity Deduplication + Class Assignment ───────────────────────────────────

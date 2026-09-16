@@ -42,12 +42,12 @@ Usage:
         --graph-output output/mine/kg_graph.json
     # --run picks a specific run_<n>; default is the most recent run.
     # --use-qualifiers additionally folds each triplet's qualifiers (e.g.
-    #   "point in time: 1903") into the graph as extra raw-string edges off
-    #   a synthesized per-triplet statement node ("{subject} {relation}
-    #   {object}"), linked back in via invented has_subject/has_object
-    #   edges so retrieval can actually reach them. Qualifiers are
-    #   otherwise extracted (Step 0) but never used anywhere downstream.
-    #   Without --graph-output, the default filename switches to
+    #   "point in time: 1903") directly into that triplet's own edge label
+    #   (e.g. "received Nobel Prize (point in time: 1903)"), so a qualifier
+    #   fact is retrievable in the exact same hop as its base fact -- no
+    #   new entities, no extra graph-walk cost. Qualifiers are otherwise
+    #   extracted (Step 0) but never used anywhere downstream. Without
+    #   --graph-output, the default filename switches to
     #   kg_graph_qualifiers.json so both variants can be built side by
     #   side and A/B'd in evaluation.
 """
@@ -59,7 +59,7 @@ import json
 import logging
 from pathlib import Path
 
-from src.ontodisco.entity_dedup import _make_compound, _normalize_compound
+from src.ontodisco.entity_dedup import _make_compound, _normalize_compound, _parse_compound
 from src.ontodisco.pipeline import _existing_run_numbers, _load_checkpoint, load_triplets
 from src.ontodisco.utils.dedup_base import normalize_label
 
@@ -88,54 +88,93 @@ def _resolve_relation_id(raw_relation: str, relation_vocab) -> str | None:
     return relation_vocab.surface_to_id.get(raw_relation) or relation_vocab.surface_to_id.get(normalize_label(raw_relation))
 
 
+def _entity_label(entity_id: str, entity_vocab) -> str:
+    """The entity's canonical label as a GRAPH NODE name -- always the bare
+    entity name, never the compound "name [type]" form.
+
+    entity_dedup now strips this at the source, but checkpoints written before
+    that fix still carry leaked brackets (measured: 17.3% of canonical labels
+    in one MINE run), and a node called "alexander fleming [human]" embeds
+    differently from "alexander fleming", which measurably degrades retrieval.
+    Stripping here too keeps graph building correct against any checkpoint.
+    """
+    return _parse_compound(entity_vocab.entities[entity_id].canonical_label)[0]
+
+
 def _resolve_entity_id(raw_name: str, canonical_type_label: str, entity_vocab) -> str | None:
     compound = _make_compound(raw_name, canonical_type_label)
     return entity_vocab.surface_to_id.get(compound) or entity_vocab.surface_to_id.get(_normalize_compound(compound))
 
 
-HAS_SUBJECT_EDGE = "has_subject"
-HAS_OBJECT_EDGE = "has_object"
+def _qualifier_enriched_relation(triplet: dict, relation_label: str, *,
+                                  relation_vocab=None, type_vocab=None, entity_vocab=None) -> str | None:
+    """Fold a triplet's qualifiers directly into an enriched predicate label
+    for THIS triplet's own (subject, relation, object) edge -- e.g.
+    "received Nobel Prize (point in time: 1903)" -- instead of reifying the
+    triplet into a synthetic statement node linked back to subject/object
+    via invented has_subject/has_object edges (the previous design here).
+    That reification was semantically principled (see the collision note
+    below) but a poor fit for how this graph actually gets read: MINE's
+    retriever (kg_gen.KGGen.retrieve(), embedding-match seed nodes + a
+    fixed-depth graph walk, with no special handling for reified statement
+    nodes) essentially never reaches a node whose only path back to a real
+    entity is through an invented has_subject/has_object edge -- measured
+    on an AutoOntic MINE graph, reification cost ~11% of entities and ~32%
+    of triples as pure bookkeeping that rarely surfaced in retrieved
+    context. Folding into the relation label keeps qualifier facts
+    reachable in the exact same hop as their base fact, at zero extra
+    entities or graph-walk cost.
 
+    Folding into the RELATION label (rather than attaching the qualifier
+    directly to the object, which is what motivated reification in the
+    first place) avoids the same collision: two different statements that
+    happen to share a canonical object -- e.g. two different people
+    "receiving" the same canonical award in different years -- each get
+    their OWN qualifier on their OWN edge, since the enriched predicate
+    lives on the (subject, *, object) triple specific to this one triplet
+    and never touches a node shared with any other statement.
 
-def _add_qualifiers(triplet: dict, subject_label: str, relation_label: str, object_label: str,
-                     entities: set[str], edges: set[str], relations: set[tuple[str, str, str]]) -> int:
-    """Qualifiers describe the STATEMENT (subject, relation, object) as a
-    whole, not the object entity alone -- attaching them directly to
-    object_label would collide different statements' qualifiers onto one
-    shared canonical entity (e.g. two different people "receiving" the same
-    canonical award in different years would both dump their "point in
-    time" qualifier onto the one shared "award" node, with no way to tell
-    them apart again). Instead we synthesize one statement node per
-    triplet (raw string, uncanonicalized like everything else qualifiers
-    touch) and hang the qualifiers off THAT, linked back to subject/object
-    via two invented (not LLM-sourced) edges so retrieval's embedding-match
-    + graph-walk can actually reach it -- a qualifier node with no path
-    back to a real entity would never surface in retrieved context.
+    Qualifier predicates and values are resolved through the SAME canonical
+    vocabularies as the main triple before folding, rather than being
+    embedded as raw extraction strings. Without this, "point in time" /
+    "time period" / "date" stay three distinct predicates inside the
+    enriched label even though relation dedup merged them, and a qualifier
+    value stays a raw string even when the identical string is a canonical
+    entity elsewhere in the graph (measured on MINE: 27% of distinct
+    qualifier objects also occur as a main subject/object). Anything that
+    fails to resolve falls back to its raw string rather than being dropped.
+
+    Returns None if the triplet has no (parseable) qualifiers.
     """
     qualifiers = triplet.get("qualifiers") or []
-    added = 0
-    statement_label = None
+    parts = []
     for qualifier in qualifiers:
         if not isinstance(qualifier, dict):
             continue
-        q_relation = str(qualifier.get("relation", "")).strip()
-        q_object = str(qualifier.get("object", "")).strip()
-        if not q_relation or not q_object:
+        q_relation = str(qualifier.get("relation") or "").strip()
+        q_object = str(qualifier.get("object") or "").strip()
+        if not (q_relation and q_object):
             continue
 
-        if statement_label is None:
-            statement_label = f"{subject_label} {relation_label} {object_label}"
-            entities.add(statement_label)
-            edges.add(HAS_SUBJECT_EDGE)
-            edges.add(HAS_OBJECT_EDGE)
-            relations.add((statement_label, HAS_SUBJECT_EDGE, subject_label))
-            relations.add((statement_label, HAS_OBJECT_EDGE, object_label))
+        if relation_vocab is not None:
+            relation_id = _resolve_relation_id(q_relation, relation_vocab)
+            if relation_id is not None:
+                q_relation = relation_vocab.relations[relation_id].canonical_label
 
-        entities.add(q_object)
-        edges.add(q_relation)
-        relations.add((statement_label, q_relation, q_object))
-        added += 1
-    return added
+        q_object_type = str(qualifier.get("object_type") or "").strip()
+        if type_vocab is not None and entity_vocab is not None and q_object_type:
+            type_id = _resolve_type_id(q_object_type, type_vocab)
+            if type_id is not None:
+                entity_id = _resolve_entity_id(
+                    q_object, type_vocab.types[type_id].canonical_label, entity_vocab,
+                )
+                if entity_id is not None:
+                    q_object = _entity_label(entity_id, entity_vocab)
+
+        parts.append(f"{q_relation}: {q_object}")
+    if not parts:
+        return None
+    return f"{relation_label} ({'; '.join(parts)})"
 
 
 def build_graph(triplets: list[dict], type_vocab, relation_vocab, entity_vocab,
@@ -184,8 +223,8 @@ def build_graph(triplets: list[dict], type_vocab, relation_vocab, entity_vocab,
             skip_counts["object_entity"] += 1
             continue
 
-        subject_label = entity_vocab.entities[subject_entity_id].canonical_label
-        object_label = entity_vocab.entities[object_entity_id].canonical_label
+        subject_label = _entity_label(subject_entity_id, entity_vocab)
+        object_label = _entity_label(object_entity_id, entity_vocab)
         relation_label = relation_vocab.relations[relation_id].canonical_label
 
         entities.add(subject_label)
@@ -195,10 +234,14 @@ def build_graph(triplets: list[dict], type_vocab, relation_vocab, entity_vocab,
         num_resolved += 1
 
         if use_qualifiers:
-            added = _add_qualifiers(triplet, subject_label, relation_label, object_label,
-                                     entities, edges, relations)
-            if added:
-                num_qualifiers_added += added
+            enriched_relation = _qualifier_enriched_relation(
+                triplet, relation_label,
+                relation_vocab=relation_vocab, type_vocab=type_vocab, entity_vocab=entity_vocab,
+            )
+            if enriched_relation is not None:
+                edges.add(enriched_relation)
+                relations.add((subject_label, enriched_relation, object_label))
+                num_qualifiers_added += 1
                 num_triplets_with_qualifiers += 1
 
     logger.info(
@@ -208,7 +251,7 @@ def build_graph(triplets: list[dict], type_vocab, relation_vocab, entity_vocab,
     logger.info("Skip breakdown: %s", skip_counts)
     if use_qualifiers:
         logger.info(
-            "Qualifiers: %d added from %d triplets (statement nodes + has_subject/has_object linking edges)",
+            "Qualifiers: %d enriched-relation edges added from %d triplets (folded into the base edge's own predicate, no new entities)",
             num_qualifiers_added, num_triplets_with_qualifiers,
         )
 

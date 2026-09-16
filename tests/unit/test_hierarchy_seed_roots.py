@@ -11,7 +11,6 @@ pipeline.
 from __future__ import annotations
 
 from src.ontodisco.hierarchy_induction import HierarchyEdge, _Node, _apply_seed_roots, _node_context
-from src.ontodisco.relation_dedup import CanonicalRelation, RelationDeduplicationResult
 
 
 def _make_pool(*labels: str) -> dict[str, _Node]:
@@ -122,30 +121,34 @@ def test_description_becomes_definition_for_synthesized_node_only():
 
 
 def test_node_context_reaches_llm_prompt_for_synthesized_seed_node():
-    # A freshly-synthesized seed node has an empty relation profile, so
-    # describe_relation_context alone would return "" -- the LLM would see
-    # a bare label with zero context. definition must fill that gap.
+    # A freshly-synthesized seed node has no corpus examples and no
+    # subclasses yet -- definition must fill that gap, or the LLM would see
+    # a bare label with zero context.
     node = _Node(type_id="type_seed0000", label="conceptual entity", profile={}, is_leaf=False,
                  definition="a type of entity")
-    rel_vocab = RelationDeduplicationResult(items={}, surface_to_id={})
 
-    ctx = _node_context(node, {node.type_id: node.profile}, rel_vocab, top_k=5)
+    ctx = _node_context(node, examples_by_type={}, subclass_labels=[])
 
     assert ctx == "a type of entity"
-    # Mirrors resolve_hierarchy_relation's own parenthetical rendering
-    # (openai_utils.py) -- label + description together, in parens.
+    # Mirrors LLMTripletExtractor._render_hierarchy_prompt's own parenthetical
+    # rendering (openai_utils.py) -- label + description together, in parens.
     assert f"{node.label} (context: {ctx})" == "conceptual entity (context: a type of entity)"
 
 
-def test_node_context_combines_definition_with_relation_signature():
-    directed = CanonicalRelation(item_id="rel_0001", canonical_label="directed")
-    rel_vocab = RelationDeduplicationResult(items={"rel_0001": directed}, surface_to_id={})
-    node = _Node(type_id="type_0001", label="film", profile={"rel_0001": 5.0}, is_leaf=True,
+def test_node_context_combines_definition_with_examples_and_subclasses():
+    node = _Node(type_id="type_0001", label="film", profile={}, is_leaf=True,
                  definition="a work of visual art")
 
-    ctx = _node_context(node, {node.type_id: node.profile}, rel_vocab, top_k=5)
+    ctx = _node_context(
+        node,
+        examples_by_type={"type_0001": ["Inception", "Casablanca"]},
+        subclass_labels=["documentary film"],
+    )
 
-    assert ctx == "a work of visual art; often appears with: directed"
+    assert ctx == (
+        "a work of visual art; for example: Inception, Casablanca; "
+        "known subclasses: documentary film"
+    )
 
 
 def test_duplicate_nested_label_under_two_parents_keeps_first_and_warns(caplog):

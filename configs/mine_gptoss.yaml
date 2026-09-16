@@ -1,0 +1,66 @@
+# configs/mine_4omini.yaml
+#
+# MINE benchmark, gpt-oss-120b via the AIRI gateway. Same settings as
+# configs/mine_4omini.yaml so the two arms differ only in model. Fresh
+# extraction (not a reuse) so this run also answers the qualifier-rate
+# question, which was previously confounded: triplets_v4 (19.4% qualifiers)
+# was gpt-oss on an EARLIER prompt revision, while triplets_4omini (3.8%)
+# was gpt-4o-mini on the final one -- model and prompt both differed.
+
+corpus_id: "mine_gptoss"
+input_path: "./data/mine/triplets_gptoss_v2.jsonl"
+output_dir: "./output/mine"
+language: "en"
+include_qualifiers: true
+
+llm:
+  model: "Openai/Gpt-oss-120b"
+  api_key_env: "AIRI_KEY"
+  base_url: "https://inference.airi.net:46783/v1"
+  proxy_key_env: "PROXY_URL"
+
+embedding:
+  contriever_model: "facebook/contriever"
+  device: null
+  embed_batch_size: 64
+
+relation_canonicalization:
+  similarity_threshold: 0.75
+  max_merge_rounds: 5
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+type_canonicalization:
+  hac_threshold: 0.75
+  relation_context_top_k: 5
+  max_merge_rounds: 5
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+hierarchy:
+  relation_signature_weighting: "ppmi"
+  weeds_containment_threshold: 0.75
+  priority_band_tolerance: 10
+  seed_roots: []
+  candidate_batch_size: 30      # cap on a level's size AND the trigger threshold for regrouping it
+  max_regroup_input: 90
+  max_regroup_rounds: 3
+  label_collision_threshold: 0.90
+  max_child_claim_share: 0.6
+  max_depth: 50
+  embed_batch_size: 64
+  context_max_examples: 10      # real corpus entity examples shown per type
+  context_max_subclasses: 5     # already-placed subclasses shown per type
+  max_parallel_workers: 8
+
+entity_canonicalization:
+  similarity_threshold: 0.85
+  max_merge_rounds: 5
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+constraints:
+  hard_threshold: 0.90
+  soft_threshold: 0.50
+  hint_threshold: 0.20
+  min_support_for_hard: 3

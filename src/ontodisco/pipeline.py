@@ -2,29 +2,22 @@
 Pipeline Orchestration
 =======================
 
-Runs the currently-implemented steps of the ontology discovery pipeline from
-a single YAML config:
+Runs the steps of the ontology discovery pipeline from a single YAML config:
 
     Relation Canonicalization -> Type Canonicalization -> Hierarchy Induction
     -> Entity Deduplication + Class Assignment -> Constraint Induction
 
-(Serialization is not implemented yet and is out of scope here -- add it as
-its own checkpointed step once it exists.)
-
-Step order is NOT "entity dedup, relation dedup, hierarchy induction" in that
-naive reading -- relation canonicalization runs FIRST and entity dedup runs
+Relation canonicalization runs FIRST and entity dedup runs
 LAST, because:
   - type_dedup.deduplicate_types() optionally takes the relation vocabulary
     as a `relation_result` signal (relation-signature-assisted clustering,
     see type_dedup.py) to help it avoid the exact hypernym/hyponym-as-synonym
-    over-merges we found in onto_artifacts/verified_groups.json -- this
-    pipeline always supplies it, rather than leaving it optional.
+    over-merges.
   - At the point deduplicate_relations() runs, CanonicalRelation.subject_types
     / object_types are still raw type labels (type dedup hasn't produced T*
     yet); relation_dedup.update_relation_type_map() is what later resolves
     them to canonical type_ids, and it must run exactly once, AFTER type
-    dedup, BEFORE hierarchy induction (see the checkpointing note below for
-    why this step is deliberately never checkpointed on its own).
+    dedup, BEFORE hierarchy induction.
   - entity_dedup.deduplicate_entities() needs canonical type_ids (from type
     dedup) to build its compound "name [type]" labels -- that's what makes
     class assignment fall out of clustering for free -- AND needs the
@@ -39,15 +32,13 @@ LAST, because:
     over observed domain/range types). It re-resolves the raw triplets
     itself (nothing upstream keeps the joint per-triple (subject_type,
     object_type) pairing for a relation), so it does not depend on
-    entity_dedup's output at all -- it's ordered last only because it's the
-    remaining orchestrated step, not because of a data dependency on entity
-    dedup specifically.
+    entity_dedup's output at all.
 
 Each of the five LLM-backed steps (relation dedup, type dedup, hierarchy
 induction, entity dedup, constraint induction) is checkpointed to
-`output_dir/checkpoints/run_<n>/<step>.pkl` via pickle (preserves the
-dataclasses / sets exactly, no custom serialization needed). Every run gets
-its own `run_<n>` folder (n = 1, 2, 3, ... auto-incremented) so successive
+`output_dir/checkpoints/run_<n>/<step>.pkl`, preserving the
+dataclasses / sets exactly.
+Every run gets its own `run_<n>` folder (n = 1, 2, 3, ... auto-incremented) so successive
 runs never clobber each other's checkpoints or metadata:
   - resume=False (a fresh run) always allocates a NEW run_<n> folder --
     n = 1 + the highest existing run number under output_dir/checkpoints
@@ -92,8 +83,11 @@ from src.ontodisco.relation_dedup import (
     update_relation_type_map,
 )
 from src.ontodisco.type_dedup import CanonicalType, TypeDeduplicationResult, deduplicate_types
+from src.ontodisco.quality_metrics import compute_metrics
 from src.ontodisco.utils.dedup_base import normalize_label
-from src.ontodisco.utils.openai_utils import LLMTripletExtractor
+from src.ontodisco.utils.openai_utils import (
+    LLMTripletExtractor, resolve_system_prompt_paths_for_language,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -112,8 +106,8 @@ class LLMConfig:
     api_key_env: str = "OPENAI_API_KEY"      # env var to read the key from -- never put keys in YAML
     base_url: str = "https://api.openai.com/v1"
     proxy_key_env: Optional[str] = None      # optional: env var holding an HTTP(S) proxy URL, routed
-                                              # through httpx.Client(proxy=...) same as run_judge_eval.py's
-                                              # judge client; None (default) means no proxy -- direct connection
+                                              # through httpx.Client(proxy=...)
+                                              # None (default) means no proxy -- direct connection
 
 
 @dataclass
@@ -155,6 +149,19 @@ class PipelineConfig:
     corpus_id: str = "my_corpus"
     input_path: str = ""                     # JSONL file of raw triplets
     output_dir: str = "./output"
+    include_qualifiers: bool = True           # fold each triplet's qualifiers into the ONTOLOGY, not just
+                                               # the graph: qualifier object_types enter T*, qualifier
+                                               # predicates enter R*, qualifier (object, object_type)
+                                               # pairs enter the entity vocabulary. Requires the
+                                               # extraction prompt's qualifier naming rules (which keep
+                                               # qualifier values atomic)
+    language: str = "en"                     # selects which localized prompt variant (e.g.
+                                              # "hierarchy_pairwise_action_ru.txt") each orchestrated
+                                              # step's LLMTripletExtractor loads -- see
+                                              # openai_utils.resolve_system_prompt_paths_for_language().
+                                              # Does NOT affect extraction (Step 0 isn't part of
+                                              # run_pipeline() -- see scripts/clinrecs/extract_triplets.py's
+                                              # own --ru flag for that).
 
     llm: LLMConfig = field(default_factory=LLMConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
@@ -183,6 +190,8 @@ def load_config(path: str | Path) -> PipelineConfig:
         corpus_id=raw.get("corpus_id", PipelineConfig.corpus_id),
         input_path=raw.get("input_path", ""),
         output_dir=raw.get("output_dir", "./output"),
+        include_qualifiers=raw.get("include_qualifiers", PipelineConfig.include_qualifiers),
+        language=raw.get("language", PipelineConfig.language),
         llm=_from_dict(LLMConfig, raw.get("llm", {})),
         embedding=_from_dict(EmbeddingConfig, raw.get("embedding", {})),
         type_canonicalization=_from_dict(TypeCanonicalizationConfig, raw.get("type_canonicalization", {})),
@@ -327,19 +336,14 @@ def run_pipeline(config: PipelineConfig, *, resume: bool = False) -> OntoDiscoRe
         )
     llm_extractor = LLMTripletExtractor(
         api_key=api_key, model=config.llm.model, base_url=config.llm.base_url, proxy=proxy,
+        system_prompt_paths=resolve_system_prompt_paths_for_language(config.language),
     )
 
     triplets = load_triplets(config.input_path)
     step_durations: dict[str, float] = {}
     token_usage_by_step: dict[str, dict] = {}
 
-    # Resolve an external seed-ontology file (if any) before hierarchy
-    # induction runs, mirroring how config.input_path is only read here at
-    # run time rather than at load_config() time. Doing this unconditionally
-    # -- even under --resume, when hierarchy_induction's checkpoint may make
-    # induce_hierarchy() a no-op this run -- keeps config.hierarchy.seed_roots
-    # (and therefore run_metadata.json's config dump) an accurate record of
-    # the seed hierarchy actually in effect, not just a dangling file path.
+    # Resolve an external seed-ontology file (if any) before hierarchy induction runs
     if config.hierarchy.seed_roots_path:
         if config.hierarchy.seed_roots:
             logger.warning(
@@ -372,6 +376,7 @@ def run_pipeline(config: PipelineConfig, *, resume: bool = False) -> OntoDiscoRe
             max_merge_rounds=config.relation_canonicalization.max_merge_rounds,
             max_parallel_workers=config.relation_canonicalization.max_parallel_workers,
             max_cluster_size=config.relation_canonicalization.max_cluster_size,
+            include_qualifiers=config.include_qualifiers,
         )
         _save_checkpoint(run_dir, "relation_dedup", relation_vocab)
     step_durations["relation_dedup"] = time.monotonic() - t0
@@ -386,7 +391,9 @@ def run_pipeline(config: PipelineConfig, *, resume: bool = False) -> OntoDiscoRe
         type_vocab = _load_checkpoint(run_dir, "type_dedup")
     else:
         logger.info("=== Step: Type Canonicalization ===")
-        raw_type_labels = _collect_type_surface_forms(triplets)
+        raw_type_labels = _collect_type_surface_forms(
+            triplets, include_qualifiers=config.include_qualifiers,
+        )
         type_vocab = deduplicate_types(
             raw_type_labels=raw_type_labels,
             llm_extractor=llm_extractor,
@@ -422,7 +429,7 @@ def run_pipeline(config: PipelineConfig, *, resume: bool = False) -> OntoDiscoRe
     else:
         logger.info("=== Step: Hierarchy Induction ===")
         hierarchy_result = induce_hierarchy(
-            type_vocab, relation_vocab, llm_extractor,
+            type_vocab, relation_vocab, llm_extractor, triplets,
             contriever_model=config.embedding.contriever_model,
             device=config.embedding.device,
             config=config.hierarchy,
@@ -462,6 +469,7 @@ def run_pipeline(config: PipelineConfig, *, resume: bool = False) -> OntoDiscoRe
             max_merge_rounds=config.entity_canonicalization.max_merge_rounds,
             max_parallel_workers=config.entity_canonicalization.max_parallel_workers,
             max_cluster_size=config.entity_canonicalization.max_cluster_size,
+            include_qualifiers=config.include_qualifiers,
         )
         _save_checkpoint(run_dir, "entity_dedup", entity_vocab)
     step_durations["entity_dedup"] = time.monotonic() - t0
@@ -516,6 +524,7 @@ def _merge_synthesized_types_into_vocab(
     back to the raw "type_h0007"-style id instead of its verbalized name.
     Mutates type_vocab in place (same "cheap, idempotent, recompute after
     loading checkpoints" pattern as update_relation_type_map) and returns it."""
+    n_label_taken = 0
     for st in hierarchy_result.synthesized_types:
         if st.type_id in type_vocab.items:
             continue
@@ -524,17 +533,53 @@ def _merge_synthesized_types_into_vocab(
             canonical_label=st.canonical_label,
             surface_forms=[st.canonical_label],
         )
-        type_vocab.surface_to_id[normalize_label(st.canonical_label)] = st.type_id
+        # NEVER clobber an existing surface_to_id entry. A synthesized label
+        # frequently collides with a label already in T* -- hierarchy induction
+        # invents exactly the kind of abstract parent ("organism", "process",
+        # "outcome") the corpus also mentions literally -- and it can collide
+        # with another synthesized label too, since duplicate-label
+        # reconciliation there is deliberately confirm-only and
+        # leaves genuine duplicates split when profiles are too sparse to judge.
+
+        # The synthesized type stays in `items` either way, so type_id -> label
+        # resolution (this function's actual purpose) still works for it.
+        norm_label = normalize_label(st.canonical_label)
+        if norm_label in type_vocab.surface_to_id:
+            n_label_taken += 1
+            continue
+        type_vocab.surface_to_id[norm_label] = st.type_id
+    if n_label_taken:
+        logger.info(
+            "Folded %d synthesized types into the type vocabulary; %d kept their id->label "
+            "entry only, because their label was already claimed (existing type left intact)",
+            len(hierarchy_result.synthesized_types), n_label_taken,
+        )
     return type_vocab
 
 
-def _collect_type_surface_forms(triplets: list[dict]) -> list[str]:
+def _collect_type_surface_forms(triplets: list[dict], *, include_qualifiers: bool = True) -> list[str]:
+    """Collect every raw type label the corpus mentions, for Step 2 to canonicalize.
+
+    include_qualifiers also folds each qualifier's own `object_type` into T*.
+    Without it a qualifier value's type (e.g. "year" for a "point in time"
+    qualifier) never enters the type vocabulary at all, so it can never be
+    canonicalized, placed in the hierarchy, or used to type the qualifier
+    object as an entity in Step 4 -- the extraction prompt emits the field
+    and nothing downstream reads it.
+    """
     labels: list[str] = []
     for triplet in triplets:
         for type_key in ("subject_type", "object_type"):
-            raw_type = triplet.get(type_key, "").strip()
+            raw_type = (triplet.get(type_key) or "").strip()
             if raw_type:
                 labels.append(raw_type)
+        if include_qualifiers:
+            for qualifier in (triplet.get("qualifiers") or []):
+                if not isinstance(qualifier, dict):
+                    continue
+                raw_type = (qualifier.get("object_type") or "").strip()
+                if raw_type:
+                    labels.append(raw_type)
     return labels
 
 
@@ -579,14 +624,26 @@ def _write_run_metadata(
         },
         "step_durations_seconds": step_durations,
         # Per-step {prompt_tokens, completion_tokens, total_tokens, cost_usd},
-        # computed as a before/after snapshot diff around each step (see
-        # _diff_usage) -- a resumed (checkpoint-loaded) step correctly shows
-        # all zeros, since it made no LLM calls this run.
+        # computed as a before/after snapshot diff around each step
         "token_usage_by_step": token_usage_by_step,
         # Full resolved config (LLM model/base_url, embedding model/device/
         # batch size, every step's hyperparameters) so this specific run is
         # reproducible from the metadata file alone. api_key_env only records
         # which env var was read, never the key value itself.
+        
+        # Zero-LLM structural quality metrics (see quality_metrics.py). Computed
+        # from the in-memory step outputs, so an ablation can be judged from the
+        # metadata file alone without re-running an expensive downstream eval.
+        
+        # Graph metrics need an exported kg-gen graph and are therefore absent
+        # here -- run quality_metrics.py --graph for those.
+        "quality_metrics": compute_metrics(
+            type_vocab=type_vocab,
+            relation_vocab=relation_vocab,
+            entity_vocab=entity_vocab,
+            hierarchy_result=hierarchy_result,
+            constraints=constraints_result,
+        ),
         "config": asdict(config),
     }
     path = run_dir / "run_metadata.json"

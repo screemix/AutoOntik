@@ -30,6 +30,64 @@ logger = get_logger("OpenAIUtils")
 # OpenAI
 MAX_ATTEMPTS = 1
 
+PROMPT_FOLDER = Path(__file__).parent / "prompts"
+
+# The set of prompt keys the five orchestrated pipeline.py steps actually
+# call (relation dedup, type dedup, hierarchy induction, entity dedup,
+# constraints' relation-direction classification). Kept as a module-level
+# constant, rather than only living inline in __init__'s default, so
+# resolve_system_prompt_paths_for_language() below can build a localized
+# variant of it without duplicating the mapping.
+DEFAULT_SYSTEM_PROMPT_PATHS = {
+    "triplet_extraction": "prompt_1_with_types_and_qualifiers.txt",
+    "cluster_entity_types": "cluster_entity_types.txt",
+    "cluster_entity_names": "cluster_entity_names.txt",
+    "cluster_relations": "cluster_relations.txt",
+    "hierarchy_parent_check": "hierarchy_parent_check.txt",
+    "hierarchy_child_check": "hierarchy_child_check.txt",
+    "hierarchy_regroup": "hierarchy_regroup.txt",
+    "relation_direction": "relation_direction.txt",
+    "triple_match": "triple_match.txt",
+    "type_compare": "type_compare.txt",
+    "gold_triple_groundedness": "gold_triple_groundedness.txt",
+    "question_entity_extractor": "question_entity_extraction.txt",
+    "question_entity_ranker": "question_entity_ranker.txt",
+    "qa": "qa_answer.txt",
+}
+
+
+def resolve_system_prompt_paths_for_language(language: str) -> Optional[Dict[str, str]]:
+    """Build a system_prompt_paths override for LLMTripletExtractor that
+    prefers each prompt's `<name>_{language}.txt` variant over the English
+    default, for whichever prompt keys actually have one on disk under
+    PROMPT_FOLDER.
+
+    Returns None for language="en" (LLMTripletExtractor's own built-in
+    default applies unchanged) so English runs -- the common case -- see no
+    behavior change at all.
+
+    A prompt key with no localized variant (e.g. an eval-only prompt this
+    language was never authored for) silently keeps the English default and
+    logs a warning, rather than raising -- localization coverage growing
+    over time shouldn't require every caller of run_pipeline() to also
+    track which prompts have which variants.
+    """
+    if language == "en":
+        return None
+    paths = dict(DEFAULT_SYSTEM_PROMPT_PATHS)
+    for key, filename in DEFAULT_SYSTEM_PROMPT_PATHS.items():
+        stem, suffix = filename.rsplit(".", 1)
+        localized = f"{stem}_{language}.{suffix}"
+        if (PROMPT_FOLDER / localized).is_file():
+            paths[key] = localized
+        else:
+            logger.warning(
+                "No %s prompt variant for language=%r (looked for %s) -- "
+                "falling back to the English default for this prompt",
+                key, language, localized,
+            )
+    return paths
+
 
 class LLMTripletExtractor:
     """A class for extracting and processing knowledge graph triplets using OpenAI's LLMs."""
@@ -46,12 +104,15 @@ class LLMTripletExtractor:
         "openai/gpt-oss-120b": {"input": 0.05, "output": 0.2},
         "Qwen/Qwen3-Next-80B-A3B-Instruct": {"input": 0.05, "output": 0.2},  # configs/qwen.yaml, same AIRI-gateway placeholder rate as the other AIRI-served models above
         "openai/gpt-4o": {"input": 2.5, "output": 10},  # OpenRouter slug for the judge model -- same real per-token rate as "gpt-4o" above
+        "openai/gpt-4o-mini": {"input": 0.15, "output": 0.6},  # OpenRouter slug; same rate as "gpt-4o-mini". Without
+                                                                # this entry the price lookup falls back to 0 and every
+                                                                # cost/token report for the run silently reads $0.000.
     }
 
     def __init__(
         self,
         api_key: str,
-        prompt_folder_path: str = str(Path(__file__).parent / "prompts"),
+        prompt_folder_path: str = str(PROMPT_FOLDER),
         system_prompt_paths: Optional[Dict[str, str]] = None,
         model: str = "gpt-4o",
         max_attempts=MAX_ATTEMPTS,
@@ -76,19 +137,7 @@ class LLMTripletExtractor:
             self.client = openai.OpenAI(api_key=api_key, base_url=base_url)
 
         if system_prompt_paths is None:
-            system_prompt_paths = {
-                "triplet_extraction": "prompt_1_with_types_and_qualifiers.txt",
-                "cluster_entity_types": "cluster_entity_types.txt",
-                "cluster_entity_names": "cluster_entity_names.txt",
-                "cluster_relations": "cluster_relations.txt",
-                "hierarchy_pairwise_action": "hierarchy_pairwise_action.txt",
-                "relation_direction": "relation_direction.txt",
-                "triple_match": "triple_match.txt",
-                "type_compare": "type_compare.txt",
-                "question_entity_extractor": "question_entity_extraction.txt",
-                "question_entity_ranker": "question_entity_ranker.txt",
-                "qa": "qa_answer.txt",
-            }
+            system_prompt_paths = dict(DEFAULT_SYSTEM_PROMPT_PATHS)
 
         # Load all prompts (paths may include subfolders, e.g. triplet_extraction/foo.txt)
         prompt_folder = Path(prompt_folder_path)
@@ -283,37 +332,9 @@ class LLMTripletExtractor:
 
         return groups
 
-    def resolve_hierarchy_relation(
-        self, focal_label: str, candidate_labels: list[str],
-        focal_context: str = "", candidate_context: Optional[Dict[str, str]] = None,
-    ) -> dict:
-        """Ask the LLM how one focal type relates to a batch of existing
-        candidate types (see hierarchy_induction.py's
-        _resolve_with_batched_escalation, which calls this once per
-        similarity-ranked batch of candidates).
-
-        Returns a dict with "relation" in
-        {"parent", "child", "same_concept", "same_class", "none"}. For every
-        relation except "child", the chosen candidate is under "candidate"
-        (a single label string, omitted/ignored for "none"). For "child",
-        the focal type may subsume MORE THAN ONE candidate at once (CLAUDE.md
-        §16.2.2's "return a set, not a single child" requirement -- without
-        this, a focal node that should retroactively absorb two existing
-        siblings would only catch one per placement call, since nothing
-        guarantees a later call ever re-examines the one left behind) --
-        normalized here into "candidates" (always a list), regardless of
-        whether the LLM used the singular "candidate" or plural "candidates"
-        key in its raw JSON.
-        Also includes "confidence", and -- only for "same_class" --
-        "new_parent_label"/"new_parent_definition".
-        Returns {"relation": "none"} on any unparseable response, never raises.
-        """
-        system_prompt = self.prompts["hierarchy_pairwise_action"]
-
-        focal_str = focal_label
-        if focal_context:
-            focal_str = f"{focal_label} (context: {focal_context})"
-
+    @staticmethod
+    def _render_hierarchy_prompt(focal_label, focal_context, candidate_labels, candidate_context):
+        focal_str = f"{focal_label} (context: {focal_context})" if focal_context else focal_label
         if candidate_context:
             candidates_str = ", ".join(
                 f"{c} (context: {candidate_context[c]})" if candidate_context.get(c) else c
@@ -321,40 +342,119 @@ class LLMTripletExtractor:
             )
         else:
             candidates_str = ", ".join(candidate_labels)
+        return f"Focal type: {focal_str}\nCandidates: {candidates_str}"
 
-        user_prompt = f"Focal type: {focal_str}\nExisting candidates: {candidates_str}"
+    def check_hierarchy_parent(
+        self, focal_label: str, candidate_labels: list[str],
+        focal_context: str = "", candidate_context: Optional[Dict[str, str]] = None,
+    ) -> dict:
+        """Does focal belong UNDER any one candidate ("every focal is a kind
+        of candidate")? This is the ONLY question asked here -- whether focal
+        is a parent OF a candidate is a separate call, check_hierarchy_children.
+        Splitting the old five-way resolve_hierarchy_relation into these two
+        single-purpose questions is what fixed the model's measured positional
+        bias (CLAUDE.md §6): asked as one multi-option choice, the model
+        defaulted to "the candidate is my parent" regardless of true
+        direction; asked this question alone, it doesn't.
 
+        Returns {"parent": <label> or None, "same_concept": bool, "confidence": float}.
+        {"parent": None} on any unparseable response or call failure, never raises.
+        """
+        system_prompt = self.prompts["hierarchy_parent_check"]
+        user_prompt = self._render_hierarchy_prompt(focal_label, focal_context, candidate_labels, candidate_context)
         try:
             response = self.get_completion(system_prompt=system_prompt, user_prompt=user_prompt)
         except Exception:
-            logger.exception("resolve_hierarchy_relation: LLM call failed")
-            return {"relation": "none"}
-
-        logger.log(logging.DEBUG, f"Input: focal={focal_label!r} candidates={candidate_labels!r}")
-        logger.log(logging.DEBUG, f"Response: {response}")
-
+            logger.exception("check_hierarchy_parent: LLM call failed")
+            return {"parent": None}
+        logger.log(logging.DEBUG, f"parent_check: focal={focal_label!r} candidates={candidate_labels!r} -> {response}")
         if not isinstance(response, dict):
-            logger.warning("resolve_hierarchy_relation: LLM returned unparseable response")
-            return {"relation": "none"}
-
-        if response.get("relation") not in ("parent", "child", "same_concept", "same_class", "none"):
+            logger.warning("check_hierarchy_parent: LLM returned unparseable response")
+            return {"parent": None}
+        parent = response.get("parent")
+        if parent is not None and parent not in candidate_labels:
             logger.warning(
-                "resolve_hierarchy_relation: LLM returned unknown relation %r; treating as none",
-                response.get("relation"),
+                "check_hierarchy_parent: LLM named %r, not one of the given candidates; treating as no match",
+                parent,
             )
-            return {"relation": "none"}
+            return {"parent": None}
+        return {
+            "parent": parent,
+            "same_concept": bool(response.get("same_concept")),
+            "confidence": response.get("confidence", 0.5),
+        }
 
-        if response.get("relation") == "child":
-            raw_candidates = response.get("candidates")
-            if raw_candidates is None:
-                single = response.get("candidate")
-                raw_candidates = [single] if single else []
-            elif not isinstance(raw_candidates, list):
-                raw_candidates = [raw_candidates]
-            response = dict(response)
-            response["candidates"] = [str(c) for c in raw_candidates if c]
+    def check_hierarchy_children(
+        self, focal_label: str, candidate_labels: list[str],
+        focal_context: str = "", candidate_context: Optional[Dict[str, str]] = None,
+    ) -> dict:
+        """Which candidates, if any, does focal subsume ("every candidate is
+        a kind of focal")? Only worth calling once check_hierarchy_parent has
+        already found nothing for this level -- see hierarchy_induction.py's
+        _place_node.
 
-        return response
+        Returns {"children": [<label>, ...], "confidence": float} -- an empty
+        list on any unparseable response or call failure, never raises.
+        Labels not among candidate_labels are dropped rather than trusted.
+        """
+        system_prompt = self.prompts["hierarchy_child_check"]
+        user_prompt = self._render_hierarchy_prompt(focal_label, focal_context, candidate_labels, candidate_context)
+        try:
+            response = self.get_completion(system_prompt=system_prompt, user_prompt=user_prompt)
+        except Exception:
+            logger.exception("check_hierarchy_children: LLM call failed")
+            return {"children": []}
+        logger.log(logging.DEBUG, f"child_check: focal={focal_label!r} candidates={candidate_labels!r} -> {response}")
+        if not isinstance(response, dict):
+            logger.warning("check_hierarchy_children: LLM returned unparseable response")
+            return {"children": []}
+        raw = response.get("children")
+        if raw is None:
+            raw = []
+        elif not isinstance(raw, list):
+            raw = [raw]
+        valid = set(candidate_labels)
+        children = [str(c) for c in raw if c in valid]
+        dropped = [c for c in raw if c not in valid]
+        if dropped:
+            logger.warning("check_hierarchy_children: dropping unmatched label(s) %r", dropped)
+        return {"children": children, "confidence": response.get("confidence", 0.5)}
+
+    def regroup_hierarchy_siblings(self, candidate_labels: list[str]) -> list[dict]:
+        """Given a level too large to compare one-by-one, group true
+        siblings under an invented shared parent (hierarchy_induction.py's
+        _regroup_level -- the ONLY place synthesis happens now; see
+        HierarchyConfig.candidate_batch_size). Only ever called when a level
+        overflows -- never offered as a per-comparison judgment the way the
+        old same_class relation was.
+
+        Returns a list of {"label", "definition", "members"} dicts, each with
+        len(members) >= 2 and members drawn only from candidate_labels.
+        Empty list on any unparseable response or call failure, never raises.
+        """
+        system_prompt = self.prompts["hierarchy_regroup"]
+        user_prompt = "Types: " + ", ".join(candidate_labels)
+        try:
+            response = self.get_completion(system_prompt=system_prompt, user_prompt=user_prompt)
+        except Exception:
+            logger.exception("regroup_hierarchy_siblings: LLM call failed")
+            return []
+        logger.log(logging.DEBUG, f"regroup: candidates={candidate_labels!r} -> {response}")
+        if not isinstance(response, dict):
+            logger.warning("regroup_hierarchy_siblings: LLM returned unparseable response")
+            return []
+        valid = set(candidate_labels)
+        groups = []
+        for g in (response.get("groups") or []):
+            if not isinstance(g, dict):
+                continue
+            members = [m for m in (g.get("members") or []) if m in valid]
+            if len(members) < 2:
+                continue
+            groups.append({
+                "label": g.get("label"), "definition": g.get("definition"), "members": members,
+            })
+        return groups
 
     def classify_relation_direction(
         self, canonical_label: str, surface_forms: list[str],
@@ -533,6 +633,51 @@ class LLMTripletExtractor:
             user_prompt=f'Question: {question}\n\nTriplets: "{triplets}"',
             transform_to_json=False,
         )
+
+    def check_triple_groundedness_with_llm(
+        self, sentence: str, subject: str, relation: str, obj: str,
+    ) -> Dict:
+        """
+        Judge whether `sentence`, taken in isolation (no outside knowledge,
+        no surrounding-article context), actually supports the reference
+        (subject, relation, object) triple -- see
+        scripts/text2kgbench_eval/check_groundedness.py, which uses this to
+        identify Text2KGBench gold triples whose subject is only
+        established anaphorically by context outside the given sentence
+        (e.g. the source Wikipedia article's own topic), which no extractor
+        given only that isolated sentence could ever recover -- a
+        structural property of the benchmark, not a pipeline defect.
+
+        Returns {"grounded": True} or {"grounded": False, "missing":
+        "subject"|"object"|"relation"|"multiple"}. On an unparseable
+        response this FAILS OPEN ({"grounded": True}) rather than
+        defaulting to False: silently excluding a real gold triple would
+        bias the filtered recall metric upward without anyone noticing,
+        which is worse than one ungrounded triple slipping through
+        unfiltered. Does NOT catch exceptions from the underlying API call
+        itself (see match_triple_with_llm's docstring for why -- callers
+        must track call failures separately from a genuine "not grounded"
+        judgment).
+        """
+        system_prompt = self.prompts["gold_triple_groundedness"]
+        user_prompt = f'Sentence: "{sentence}"\nReference triple: ({subject}) -[{relation}]-> ({obj})'
+
+        response = self.get_completion(system_prompt=system_prompt, user_prompt=user_prompt)
+
+        logger.log(logging.DEBUG, f"Sentence: {sentence!r} Triple: {subject}/{relation}/{obj}")
+        logger.log(logging.DEBUG, f"Response: {response}")
+
+        if not isinstance(response, dict) or "grounded" not in response:
+            logger.warning("check_triple_groundedness_with_llm: LLM returned unparseable response")
+            return {"grounded": True}
+
+        if response.get("grounded"):
+            return {"grounded": True}
+
+        missing = response.get("missing")
+        if missing not in ("subject", "object", "relation", "multiple"):
+            missing = "unspecified"
+        return {"grounded": False, "missing": missing}
 
     def calculate_cost(self) -> float:
         """Calculate the total cost of API usage."""

@@ -1,0 +1,25 @@
+You are an ontology engineer. You are given a list of types that all sit at
+the SAME level -- none is a parent of another -- but there are too many to
+compare one at a time, so you must group them first.
+
+For each group of 2 or more types that plausibly share a common, currently
+NONEXISTENT parent category (true siblings -- e.g. "war film" and "action
+film" both being kinds of film genre), invent ONE short canonical label and a
+one-sentence definition for that shared parent.
+
+Rules:
+- Only group true SIBLINGS -- same level of abstraction, same kind of thing.
+  Do not group merely-related types, and do not group a general type with a
+  specific one (that is a parent/child relationship, not a sibling group --
+  leave both out of any group).
+- A type may appear in AT MOST ONE group.
+- Any type that does not clearly belong in a group: leave it out entirely.
+  Precision matters more than coverage -- when in doubt, leave it out.
+- Before inventing a label, check whether an existing, more general word
+  already used elsewhere would describe the group just as well. If so,
+  prefer reusing a short, ordinary word over a novel compound.
+
+Return ONLY JSON:
+{"groups": [{"label": "...", "definition": "...", "members": ["<exact input label>", ...]}, ...]}
+
+Empty list if nothing groups. Every member list must have length >= 2.

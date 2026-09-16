@@ -1,0 +1,66 @@
+# configs/mine_4omini.yaml
+#
+# MINE benchmark, gpt-4o-mini via OpenRouter. Pinned to exactly the effective
+# config of output/mine/checkpoints/run_11 (the 71.07% baseline) so that a
+# re-run isolates CODE changes -- the hierarchy root-registry / same_class
+# reparent+respawn work -- rather than config drift. Reuses run_11's already-
+# extracted triplets: extraction is unchanged, so re-extracting would only add
+# LLM sampling noise to the comparison.
+
+corpus_id: "mine_gpt4omini"
+input_path: "./data/mine/triplets_4omini.jsonl"
+output_dir: "./output/mine"
+language: "en"
+include_qualifiers: true
+
+llm:
+  model: "openai/gpt-4o-mini"
+  api_key_env: "OPENROUTER_KEY"
+  base_url: "https://openrouter.ai/api/v1"
+  proxy_key_env: "PROXY_URL"
+
+embedding:
+  contriever_model: "facebook/contriever"
+  device: null
+  embed_batch_size: 64
+
+relation_canonicalization:
+  similarity_threshold: 0.75
+  max_merge_rounds: 5
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+type_canonicalization:
+  hac_threshold: 0.75
+  relation_context_top_k: 5
+  max_merge_rounds: 5
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+hierarchy:
+  relation_signature_weighting: "ppmi"
+  weeds_containment_threshold: 0.75
+  priority_band_tolerance: 10
+  seed_roots: []
+  candidate_batch_size: 30      # cap on a level's size AND the trigger threshold for regrouping it
+  max_regroup_input: 90
+  max_regroup_rounds: 3
+  label_collision_threshold: 0.90
+  max_child_claim_share: 0.6
+  max_depth: 50
+  embed_batch_size: 64
+  context_max_examples: 10      # real corpus entity examples shown per type
+  context_max_subclasses: 5     # already-placed subclasses shown per type
+  max_parallel_workers: 8
+
+entity_canonicalization:
+  similarity_threshold: 0.85
+  max_merge_rounds: 5
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+constraints:
+  hard_threshold: 0.90
+  soft_threshold: 0.50
+  hint_threshold: 0.20
+  min_support_for_hard: 3

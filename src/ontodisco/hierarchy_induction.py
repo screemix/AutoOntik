@@ -18,24 +18,38 @@ connected to their seed parent by a trusted, non-LLM HierarchyEdge
 nested seed children surface the ordinary way, by descending into their
 seed parent as the current anchor (see `_apply_seed_roots`).
 
-FOUR-WAY DECISION PER LEVEL (CLAUDE.md §16.2.2), replacing the old
-`_descend_tree()`'s binary parent-vs-stop check: at each level, an incoming
-node is compared against the current candidate set and can be told it's a
-synonym (merge -- this is what fixes the lost-synonym gap: the old code saw
-this candidate too, it just discarded a same_concept answer), a child of one
-of them (descend further), a PARENT of one OR MORE of them (insert above all
-of them at once, in the same call, retroactively correcting an earlier
-too-shallow attachment -- the concrete fix for the sparse-forest gap; the LLM
-names every candidate it subsumes rather than just one, so a later call isn't
-relied on to catch the rest), or none of the above (settle here).
+TWO DIRECTIONAL QUESTIONS PER LEVEL, NOT ONE FIVE-WAY
+CHOICE: at each level, a PARENT CHECK asks whether the focal node belongs
+under any current candidate (yes -> descend into its children; a
+"same_concept" flag means collapse instead). Only if that finds nothing does
+a separate CHILD CHECK ask whether focal subsumes any current candidates
+(yes -> retroactively insert focal above them, correcting an earlier
+too-shallow attachment; focal settles here). Splitting these into two
+single-purpose questions, instead of one prompt offering parent/child/
+same_concept/same_class/none at once, measurably fixed the model's
+positional bias toward answering "the candidate is my parent" regardless of
+true direction (framing-experiment accuracy on directional pairs: ~31-69%
+for the old five-way prompt vs. 94-100% for a plain yes/no framing of the
+same question) -- see CLAUDE.md §6.
 
-CANDIDATE BATCHING WITH ESCALATION (CLAUDE.md §16.2.3): candidates are shown
-in similarity-ranked batches (`candidate_batch_size`) rather than a small
-fixed top-k. Only a "none" result escalates to the next, less-similar batch;
-every other outcome is conclusive and stops the search immediately, since
-later batches can't produce a *better* match than an already-conclusive one.
+CAPACITY-TRIGGERED REGROUPING, NOT UNBOUNDED SYNTHESIS:
+there is no general "these seem related, invent a shared parent" action
+available on every comparison (the old `same_class`) -- inventing new
+abstract nodes on a subjective judgment, with no bound on how often it
+fires, is what let one bad batch (bulk-claiming `historical period` over 20
+candidates) turn into 270 synthesized nodes with only 185 distinct labels
+(`abstract concept` minted 20 separate times). Instead, a level is shown to
+a focal node WHOLE, always <= `candidate_batch_size`: the moment it would
+exceed that, `_regroup_level` consolidates it first by grouping true
+siblings under an invented (or, via `_check_collision`, REUSED) shared
+parent. Regrouping is a capacity-management response to a structural fact
+(too many candidates to show), not a semantic judgment offered on every
+comparison -- which is also what makes candidate visibility unconditional:
+a focal node always sees every current candidate at its level, so no
+similarity-ranking or escalation-batching machinery is needed to decide
+what it gets shown.
 
-DEPTH AS A DEFERRED CUT (CLAUDE.md §16.2.7): once a node's placement would
+DEPTH AS A DEFERRED CUT: once a node's placement would
 exceed `max_depth`, it is NOT discarded and NOT silently attached as if it
 were a confirmed sibling relationship -- it's recorded in
 `HierarchyInductionResult.unresolved_children`, a structurally separate
@@ -44,7 +58,7 @@ never mistake a deferred placement for an LLM-confirmed one. Resuming later
 just means seeding a fresh pool from exactly that bucket and re-running this
 same module on it -- no new algorithm needed.
 
-PARALLEL PLACEMENT (CLAUDE.md §16.2.4): band 1 (the root band) always runs
+PARALLEL PLACEMENT: band 1 (the root band) always runs
 sequentially -- every node's first comparison is against the top-level pool
 (current_anchor=None), so band 1 is one shared anchor regardless, and
 threading it would just add overhead for no gain. From band 2 onward,
@@ -60,14 +74,11 @@ their own first "parent" descent into different branches. This is exactly
 why `priority_band_tolerance` (below) matters for more than correctness: a
 wider band keeps the thread pool's queue full of ready work while the root
 lock drains, instead of workers idling for lack of anything else to start.
-
-NOT IMPLEMENTED YET (see CLAUDE.md §16.4 for the full list): confidence-tiered
-model routing (§16.2.6, explicitly deferred), and backtracking across
-branches once a node has committed to one.
 """
 
 from __future__ import annotations
 
+import math
 import logging
 import threading
 from collections import defaultdict
@@ -103,16 +114,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class HierarchyEdge:
-    """A single directed subClassOf edge. Direction: child IS-A parent.
-
-    Unlike the earlier design, an edge is not necessarily permanent for the
-    edge's lifetime of the run: a "parent of an existing sibling" decision
-    (CLAUDE.md §16.2.2c) removes an existing child's edge and replaces it
-    with one pointing at the newly-inserted intermediate node. `is_direct`
-    remains always True regardless -- every edge that exists at any given
-    moment still connects a direct parent/child pair; what changed is that
-    edges can now be retroactively replaced rather than being immutable from
-    the moment they're created."""
+    """A single directed subClassOf edge. Direction: child IS-A parent."""
     child_type_id: str
     parent_type_id: str
     relation_signature_score: Optional[float]   # Weeds precision(child, parent)
@@ -152,7 +154,7 @@ class SynthesizedType:
 class HierarchyConfig:
     relation_signature_weighting: str = "ppmi"  # "ppmi" | "tfidf" | "raw" -- see relation_context.py
 
-    # -- Priority queue / seeding (CLAUDE.md §16.2.1) --
+    # -- Priority queue / seeding --
     seed_roots: list = field(default_factory=list)   # external seed hierarchy; each entry is either a
                                                        # plain label (str) -- a root with no seed parent
                                                        # -- or a dict {"label": ..., "children": [...]}
@@ -165,33 +167,12 @@ class HierarchyConfig:
                                                        # non-LLM HierarchyEdge (is_seed=True) and are
                                                        # never exposed as top-level candidates -- they
                                                        # only surface once a node has already descended
-                                                       # into their seed parent as its anchor. No pinned
-                                                       # node (root or not) is ever itself placed by the
-                                                       # priority-band loop -- only ever offered as a
-                                                       # candidate. A dict entry may also carry an
-                                                       # optional "description" -- becomes the node's
-                                                       # definition (_Node.definition), but only when the
-                                                       # label is freshly synthesized (no T* match); an
-                                                       # existing T* type's own (currently always empty)
-                                                       # definition is never overwritten by a seed's
-                                                       # description. Feeds BOTH embed_text() (embedding/
-                                                       # similarity ranking) AND the "(context: ...)"
-                                                       # shown to the LLM during placement (_node_context)
-                                                       # -- the latter matters most for a synthesized seed
-                                                       # node, which otherwise reaches the LLM as a bare
-                                                       # label with zero context (no relation evidence
-                                                       # exists yet for a node nothing has attached under).
+                                                       # into their seed parent as its anchor. 
     seed_roots_path: Optional[str] = None       # path to a separate YAML file holding the seed
                                                  # hierarchy (a `seed_roots:` key, same shape as above,
                                                  # or a bare top-level list), so a reusable seed ontology
                                                  # (e.g. configs/seeds/dolce.yaml) doesn't have to be
-                                                 # copy-pasted into every pipeline config. Resolved by
-                                                 # pipeline.run_pipeline() at run time (mirrors how
-                                                 # config.input_path is only read when the pipeline
-                                                 # actually runs, not at load_config() time) -- this
-                                                 # dataclass itself does no file I/O. If both this and
-                                                 # `seed_roots` are set, the file wins and a warning is
-                                                 # logged; induce_hierarchy() itself only ever looks at
+                                                 # copy-pasted into every pipeline config.
                                                  # `seed_roots` and has no knowledge of this field.
     weeds_containment_threshold: float = 0.75   # gates both in-degree computation (which pairs count
                                                  # toward a node's breadth score) and is passed through
@@ -201,19 +182,46 @@ class HierarchyConfig:
     priority_band_tolerance: int = 10           # a band includes every node within this many in-degree
                                                  # units of the band's own top score, not just exact
                                                  # ties -- widens the tie tolerance already accepted for
-                                                 # in-degree as a frequency proxy (CLAUDE.md §16.2.1),
+                                                 # in-degree as a frequency proxy,
                                                  # and keeps each band's node count large enough to
                                                  # actually saturate the parallel placement thread pool
                                                  # (see max_parallel_workers below) rather than leaving
                                                  # it starved of independent work.
 
-    # -- Candidate batching with escalation (CLAUDE.md §16.2.3) --
-    candidate_batch_size: int = 50              # candidates shown per LLM call
-    max_escalation_batches: int = 5             # safety cap on how many less-similar batches one node
-                                                 # will escalate through before giving up (proposed
-                                                 # value, not validated -- see CLAUDE.md §16.4)
+    # -- Level capacity / regrouping --
+    candidate_batch_size: int = 30      # the cap on how many candidates a focal node is ever shown AT
+                                         # ONCE for a level (the live root set, or one anchor's current
+                                         # children). Enforced PROACTIVELY: the moment a level would
+                                         # exceed this, _regroup_level consolidates it back under the
+                                         # cap BEFORE any focal node compares against it -- so a focal
+                                         # node never needs escalation/ranking machinery to see "enough"
+                                         # of a level, it just sees all of it, always <= this size.
+    max_regroup_input: int = 90         # safety cap on one regroup CALL's own input, in case heavy
+                                         # concurrency lets a level balloon past candidate_batch_size
+                                         # before any thread notices (should be rare in practice, since
+                                         # any single thread's own overflow check fires immediately).
+    max_regroup_rounds: int = 3         # convergence cap on _regroup_level's own loop, mirroring
+                                         # dedup_base.deduplicate_with_rounds' pattern: keep regrouping
+                                         # survivors until the level is back under cap or nothing
+                                         # further consolidates, whichever comes first.
+    label_collision_threshold: float = 0.90   # embedding cosine similarity above which a newly
+                                         # proposed synthesized label is treated as the SAME concept as
+                                         # an existing one (real T* type, or already synthesized this
+                                         # run) rather than minted as a duplicate. Exact normalized-label
+                                         # match is always checked first (free); this catches near-miss
+                                         # variants an exact match wouldn't (e.g. "biological entity" vs
+                                         # "biological entity type" minted independently for the same
+                                         # underlying grouping -- measured on MINE run_13's real data).
+    max_child_claim_share: float = 0.6  # PATHOLOGY BACKSTOP ONLY, not the primary defense (that's the
+                                         # decomposed parent/child question itself, which measured no
+                                         # bulk-claiming tendency even at 35 real candidates on MINE).
+                                         # A "child" decision is rejected only if it claims more than
+                                         # this share of the batch AND more than 3 absolute candidates.
+    min_type_support: int = 1           # types with count_per_normalized BELOW this are held out of the
+                                         # initial pool and queued in deferred_low_support. 1 keeps
+                                         # everything (old behaviour). On MINE run_13, 32% of T* is seen
+                                         # exactly once and 50% at most twice.
 
-    # -- Depth (CLAUDE.md §16.2.7) --
     max_depth: Optional[int] = 15               # bounds routing cost to at most this many "descend a
                                                  # level" LLM calls per node; anything that would go
                                                  # deeper is deferred into unresolved_children, not lost.
@@ -228,8 +236,16 @@ class HierarchyConfig:
     # -- Embedding --
     embed_batch_size: int = 64
 
-    # -- LLM prompting --
-    context_top_k: int = 5                      # top relation dimensions shown per candidate
+    # -- LLM prompting: node context is built from real corpus EXAMPLES and
+    #    already-placed SUBCLASSES, never relation-profile text (CLAUDE.md
+    #    §6/§16 -- PPMI relation context was measured to CAUSE the model to
+    #    read co-occurrence as subsumption, e.g. reproducing 'historical
+    #    period' bulk-claiming 20/20 candidates; the same inputs with context
+    #    stripped, or replaced with instance examples, did not). --
+    context_max_examples: int = 10      # real corpus entity mentions shown per type, shortest first
+    context_max_subclasses: int = 5     # already-placed children shown per type (empty for a leaf
+                                         # with nothing under it yet, or a synthesized node whose
+                                         # own children haven't been decided)
 
     # -- Parallel placement (CLAUDE.md §16.2.4) --
     max_parallel_workers: int = 8                # ThreadPoolExecutor size for band 2+ (band 1 always
@@ -243,10 +259,13 @@ class HierarchyInductionResult:
     hierarchy: TypeHierarchy
     synthesized_types: list[SynthesizedType] = field(default_factory=list)
     unresolved_children: dict[str, list[str]] = field(default_factory=dict)
-    # parent_type_id (or "" for the top level) -> [type_ids deferred past
-    # max_depth]. Deliberately NOT part of `hierarchy.edges` -- see the
-    # module docstring and CLAUDE.md §16.2.7 for why keeping this
-    # structurally separate matters.
+
+    deferred_low_support: list[str] = field(default_factory=list)
+    # type_ids held back by min_type_support: QUEUED for a later construction
+    # stage, not discarded. Same "defer, never destroy" contract as
+    # unresolved_children above -- a rarely-attested type is weak EVIDENCE,
+    # not a non-existent type, and placing it against the main pool is what
+    # let 'item' (ONE corpus mention) acquire 836 descendants.
 
 
 @dataclass
@@ -275,7 +294,7 @@ def _initial_pool(
     type_vocab: DeduplicationResult,
     relation_vocab: "RelationDeduplicationResult",
     config: HierarchyConfig,
-) -> dict[str, _Node]:
+) -> tuple[dict[str, _Node], list[str]]:
     # build_relation_counts() is generic over whatever subject_types/
     # object_types currently hold; by the time hierarchy induction runs,
     # relation_dedup.update_relation_type_map() has already resolved them to
@@ -287,7 +306,11 @@ def _initial_pool(
     )
 
     pool: dict[str, _Node] = {}
+    deferred: list[str] = []
     for type_id, canonical_type in type_vocab.items.items():
+        if config.min_type_support > 1 and canonical_type.count_per_normalized < config.min_type_support:
+            deferred.append(type_id)
+            continue
         pool[type_id] = _Node(
             type_id=type_id,
             label=canonical_type.canonical_label,
@@ -296,12 +319,19 @@ def _initial_pool(
         )
 
     n_with_profile = sum(1 for n in pool.values() if n.profile)
+    if deferred:
+        logger.info(
+            "Hierarchy induction: %d type(s) below min_type_support=%d QUEUED for a later stage "
+            "(not discarded); e.g. %s",
+            len(deferred), config.min_type_support,
+            [type_vocab.items[t].canonical_label for t in deferred[:8]],
+        )
     logger.info(
         "Hierarchy induction: initial pool of %d types (%d with a non-empty "
         "relation-signature profile)",
         len(pool), n_with_profile,
     )
-    return pool
+    return pool, deferred
 
 
 def _merge_profiles(profiles: list[dict[str, float]]) -> dict[str, float]:
@@ -404,66 +434,61 @@ def _collapse_duplicate_nodes(
     return survivor_id
 
 
+def _collect_type_examples(
+    triplets: list[dict], type_vocab: DeduplicationResult, max_examples: int,
+) -> dict[str, list[str]]:
+    """Real corpus entity mentions per canonical type_id, shortest names
+    first (avoids surfacing long noisy extraction artifacts ahead of clean
+    short names) and capped at max_examples. This is the ONLY source of
+    hierarchy-placement context now -- see HierarchyConfig.context_max_examples
+    for why relation-profile text was removed rather than kept alongside it."""
+    raw: dict[str, set[str]] = defaultdict(set)
+    for triplet in triplets:
+        for name_key, type_key in (("subject", "subject_type"), ("object", "object_type")):
+            name, raw_type = triplet.get(name_key), triplet.get(type_key)
+            if not name or not raw_type:
+                continue
+            type_id = type_vocab.surface_to_id.get(normalize_label(str(raw_type)))
+            if type_id:
+                raw[type_id].add(str(name).strip())
+    return {
+        type_id: sorted(names, key=lambda s: (len(s), s))[:max_examples]
+        for type_id, names in raw.items()
+    }
+
+
+def _subclass_labels(
+    type_id: str, children_map: dict[str, list[str]], all_nodes: dict[str, _Node], max_k: int,
+) -> list[str]:
+    """Labels of up to max_k of type_id's already-placed children, per the
+    CURRENT (partially built) tree -- empty for a leaf with nothing under it
+    yet, or a synthesized node whose own children haven't been decided."""
+    return [all_nodes[cid].label for cid in children_map.get(type_id, [])[:max_k] if cid in all_nodes]
+
+
 def _node_context(
-    node: _Node, batch_profiles: dict[str, dict[str, float]],
-    relation_vocab: "RelationDeduplicationResult", top_k: int,
+    node: _Node, examples_by_type: dict[str, list[str]], subclass_labels: list[str],
 ) -> str:
     """Everything worth telling the LLM about one node beyond its bare
-    label, combined into the single "(context: ...)" parenthetical
-    resolve_hierarchy_relation already renders per focal/candidate
-    (openai_utils.py:306-316) -- no prompt-format change needed on that
-    side. Two independent sources, joined when both exist:
-      - node.definition: a seed's "description" (_apply_seed_roots), or an
-        LLM-synthesized SynthesizedType's own definition -- otherwise "".
-        This is the ONLY way seed-node descriptions ever reach the LLM's
-        placement decision; embed_text() (used for embedding/similarity
-        ranking) is a separate consumer of the same field, not this one.
-      - the PPMI relation-signature summary (describe_relation_context) --
-        "" for a freshly-synthesized seed node, which has no relation
-        evidence at all (profile={}) until something attaches under it.
-    Definition matters most for exactly that case: without it, a synthesized
-    seed node like "conceptual entity" would reach the LLM as a bare label
-    with NO context whatsoever, since describe_relation_context alone
-    returns "" for it."""
+    label: its definition (a seed's "description", or a synthesized type's
+    own definition -- otherwise ""), real corpus EXAMPLES of that type, and
+    a few of its already-placed SUBCLASSES. No relation-profile text --
+    measured to actively mislead the model into reading co-occurrence as
+    subsumption (CLAUDE.md §6): the same 20-candidate 'historical period'
+    batch that bulk-claimed food/currency/language/etc. with relation context
+    claimed only century/civilization/time once that context was stripped.
+    A type with almost no examples (e.g. a single-mention noise label) is
+    weak evidence, and the prompts tell the model to treat it that way rather
+    than guess."""
     parts = []
     if node.definition:
         parts.append(node.definition)
-    rel_ctx = describe_relation_context(node.type_id, batch_profiles, relation_vocab, top_k=top_k)
-    if rel_ctx:
-        parts.append(rel_ctx)
+    examples = examples_by_type.get(node.type_id, [])
+    if examples:
+        parts.append("for example: " + ", ".join(examples))
+    if subclass_labels:
+        parts.append("known subclasses: " + ", ".join(subclass_labels))
     return "; ".join(parts)
-
-
-def _resolve_relation_with_llm(
-    focal_node: _Node,
-    candidate_nodes: list[_Node],
-    relation_vocab: "RelationDeduplicationResult",
-    llm_extractor,
-    config: HierarchyConfig,
-) -> dict:
-    """One pairwise/multi-candidate LLM call: focal vs. up to
-    config.candidate_batch_size candidates. Never raises -- falls back to
-    {"relation": "none"} on any failure, since a no-op is always the safe
-    outcome (this node just doesn't resolve this call, and either escalates
-    to the next batch or settles at its current position)."""
-    batch_profiles = {n.type_id: n.profile for n in [focal_node] + candidate_nodes}
-    focal_context = _node_context(focal_node, batch_profiles, relation_vocab, config.context_top_k)
-    candidate_context = {
-        n.label: _node_context(n, batch_profiles, relation_vocab, config.context_top_k)
-        for n in candidate_nodes
-    }
-    candidate_context = {label: ctx for label, ctx in candidate_context.items() if ctx}
-
-    try:
-        return llm_extractor.resolve_hierarchy_relation(
-            focal_label=focal_node.label,
-            candidate_labels=[n.label for n in candidate_nodes],
-            focal_context=focal_context,
-            candidate_context=candidate_context,
-        )
-    except Exception:
-        logger.exception("resolve_hierarchy_relation call failed; treating as no relation")
-        return {"relation": "none"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -508,9 +533,9 @@ def _compute_indegree(pool: dict[str, _Node], config: HierarchyConfig) -> dict[s
     signal over the WHOLE untouched pool (unlike the old phase 1, which
     recomputed this per round over a shrinking pool). Nodes with an empty
     relation profile simply never accrue in-degree via this signal and fall
-    to the lowest band by default -- they still get placed, just via the
-    embedding-similarity fallback in candidate ranking (see
-    _resolve_with_batched_escalation)."""
+    to the lowest band by default -- they still get placed in due course,
+    just later, since this signal only controls PROCESSING ORDER, not
+    whether a node ever reaches placement."""
     index = _build_inverted_index(pool)
     pairs = _candidate_pairs(pool, index)
     in_degree: dict[str, int] = defaultdict(int)
@@ -667,122 +692,11 @@ def _apply_seed_roots(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Candidate batching with escalation (CLAUDE.md §16.2.3)
+#  Placement: two directional questions per level, capacity-triggered
+#  regrouping instead of unbounded synthesis (CLAUDE.md §16.2.2, §16.2.7,
+#  §16.2.4)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _rank_by_similarity(focal_id: str, candidate_ids: list[str], embedding_by_id: dict[str, np.ndarray]) -> list[str]:
-    focal_emb = embedding_by_id[focal_id].reshape(1, -1)
-    other_embs = np.stack([embedding_by_id[cid] for cid in candidate_ids])
-    sims = 1.0 - cosine_distances(focal_emb, other_embs)[0]
-    ranked = sorted(zip(candidate_ids, sims), key=lambda x: x[1], reverse=True)
-    return [cid for cid, _ in ranked]
-
-
-def _match_candidate_labels(
-    labels: list[str], batch_ids: list[str], batch_nodes: list[_Node],
-) -> tuple[list[str], list[str]]:
-    """Resolve each candidate label the LLM named back to its type_id within
-    this batch. Returns (matched_ids, unmatched_labels) -- a PARTIAL match
-    (e.g. a "child" decision naming two labels when only one exists in this
-    batch under that exact string) still proceeds with whatever DID match,
-    logged by the caller rather than silently dropped or treated as a full
-    escalation."""
-    label_to_id: dict[str, str] = {}
-    for cid, n in zip(batch_ids, batch_nodes):
-        label_to_id.setdefault(n.label, cid)
-    matched_ids: list[str] = []
-    unmatched: list[str] = []
-    for label in labels:
-        cid = label_to_id.get(label)
-        if cid is not None:
-            matched_ids.append(cid)
-        else:
-            unmatched.append(label)
-    return matched_ids, unmatched
-
-
-def _resolve_with_batched_escalation(
-    focal_id: str,
-    candidate_ids: list[str],
-    all_nodes: dict[str, _Node],
-    embedding_by_id: dict[str, np.ndarray],
-    relation_vocab: "RelationDeduplicationResult",
-    llm_extractor,
-    config: HierarchyConfig,
-) -> tuple[Optional[dict], Optional[list[str]]]:
-    """Show candidates in similarity-ranked batches, escalating to the next
-    (less-similar) batch ONLY on "none" -- any other outcome is conclusive
-    and stops immediately, since a less-similar batch can't produce a
-    BETTER "child of"/"parent of"/"synonym" match than an already-conclusive
-    one from a more-similar batch. Capped at max_escalation_batches.
-
-    Falls back to a stable (sorted-by-id) order, skipping similarity
-    ranking, when embeddings aren't available for every candidate -- this
-    happens for descent-level candidates (a node's existing children, which
-    were never part of any band's precomputed pool embeddings). Descent-
-    level candidate lists are typically small enough that ranking order
-    matters far less than at the top level, where the candidate set can be
-    the whole remaining pool.
-
-    The returned matched-ids list has more than one entry only for a
-    "child" decision (CLAUDE.md §16.2.2's multi-candidate requirement --
-    see resolve_hierarchy_relation's docstring); every other relation
-    always resolves to exactly one id here."""
-    if not candidate_ids:
-        return None, None
-
-    if embedding_by_id and focal_id in embedding_by_id and all(cid in embedding_by_id for cid in candidate_ids):
-        ranked_ids = _rank_by_similarity(focal_id, candidate_ids, embedding_by_id)
-    else:
-        ranked_ids = sorted(candidate_ids)
-
-    focal_node = all_nodes[focal_id]
-    batch_size = max(1, config.candidate_batch_size)
-    for batch_num in range(config.max_escalation_batches):
-        start = batch_num * batch_size
-        if start >= len(ranked_ids):
-            break
-        batch_ids = ranked_ids[start: start + batch_size]
-        batch_nodes = [all_nodes[cid] for cid in batch_ids]
-
-        decision = _resolve_relation_with_llm(focal_node, batch_nodes, relation_vocab, llm_extractor, config)
-        relation = decision.get("relation")
-        if relation and relation != "none":
-            if relation == "child":
-                # Accept either the normalized plural "candidates" (what
-                # openai_utils.LLMTripletExtractor.resolve_hierarchy_relation
-                # always produces) or a bare singular "candidate" -- don't
-                # assume every llm_extractor implementation (e.g. a test
-                # double) applies that normalization itself.
-                labels = decision.get("candidates")
-                if labels is None:
-                    single = decision.get("candidate")
-                    labels = [single] if single else []
-                elif not isinstance(labels, list):
-                    labels = [labels]
-            else:
-                single = decision.get("candidate")
-                labels = [single] if single else []
-            matched_ids, unmatched = _match_candidate_labels(labels, batch_ids, batch_nodes)
-            if unmatched:
-                logger.warning(
-                    "Batched decision for %r (relation=%s) named unmatched candidate "
-                    "label(s) %r; proceeding with whatever matched", focal_node.label, relation, unmatched,
-                )
-            if matched_ids:
-                return decision, matched_ids
-            logger.warning(
-                "Batched decision for %r (relation=%s) matched no candidates in this "
-                "batch; treating as inconclusive and escalating", focal_node.label, relation,
-            )
-        # "none", or no matched candidates at all -> escalate to the next batch
-
-    return None, None
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Placement (CLAUDE.md §16.2.2, §16.2.7, §16.2.4)
-# ═══════════════════════════════════════════════════════════════════════════════
 
 class _AnchorLocks:
     """Lazily-created per-anchor lock registry, scoped to one band and
@@ -829,6 +743,36 @@ def _build_children_map(edges: list[HierarchyEdge]) -> dict[str, list[str]]:
     return dict(children_map)
 
 
+def _is_ancestor_or_self(candidate_id: str, descendant_id: str, edges: list[HierarchyEdge]) -> bool:
+    """True if candidate_id IS descendant_id, or is already its ancestor in
+    the CURRENT edge set. Reparenting descendant_id under candidate_id when
+    this holds would create a cycle -- either a direct self-loop
+    (candidate_id == descendant_id) or a longer one (candidate_id is
+    downstream of descendant_id today, e.g. via a synthesized node minted
+    in between, so pointing descendant_id at it loops back).
+
+    Both retroactive-insertion sites (_place_node's child-check absorption,
+    _regroup_level's member reparenting) can propose exactly this: neither
+    a "does focal subsume this candidate" LLM judgment nor a regroup
+    label-collision reuse has any way to know the CURRENT tree shape, so
+    checking it structurally here is the only guard. Measured without this
+    guard on MINE (gpt-oss, 765 real types): 244 self-loops and at least one
+    3-cycle (`property -> abstract attribute -> attribute -> property`)."""
+    if candidate_id == descendant_id:
+        return True
+    parents = {e.child_type_id: e.parent_type_id for e in edges}
+    seen: set[str] = set()
+    cur = descendant_id
+    while cur in parents:
+        cur = parents[cur]
+        if cur == candidate_id:
+            return True
+        if cur in seen:
+            break
+        seen.add(cur)
+    return False
+
+
 def _reparent(
     child_id: str, new_parent_id: str,
     edges: list[HierarchyEdge], all_nodes: dict[str, _Node], confidence: float,
@@ -849,6 +793,207 @@ def _reparent(
     edges.append(_make_edge(child_id, new_parent_id, child_node.profile, parent_node.profile, confidence))
 
 
+def _embed_inline(
+    type_id: str, node: _Node, embedder, embedding_by_id: dict, embed_lock,
+) -> None:
+    """Embed a node minted by _regroup_level, so a later _check_collision
+    call has an embedding to compare against. `embedding_by_id` is built
+    once per band from `pool`, and a regroup-minted node does not exist yet
+    at that point. Best-effort -- a failure costs collision-check recall for
+    one node, never the placement itself."""
+    if embedder is None or embedding_by_id is None or type_id in embedding_by_id:
+        return
+    try:
+        vec = embedder.embed([node.embed_text()], batch_size=1)[0]
+    except Exception:   # noqa: BLE001 -- ranking degrades, placement continues
+        logger.debug("inline embed failed for %s; candidate ranking falls back to Weeds/alphabetical", type_id)
+        return
+    if embed_lock is not None:
+        with embed_lock:
+            embedding_by_id[type_id] = vec
+    else:
+        embedding_by_id[type_id] = vec
+
+
+def _check_collision(
+    label: str,
+    known_labels: dict[str, str],
+    known_lock: threading.Lock,
+    embedding_by_id: dict[str, np.ndarray],
+    embedder,
+    threshold: float,
+) -> Optional[str]:
+    """Before minting a synthesized parent, check whether `label` is really
+    the SAME concept as something that already exists -- a real T* type, or
+    a label a DIFFERENT regroup call already synthesized elsewhere in this
+    run. Two independent regroup calls have zero visibility into each
+    other's decisions, so this is the only thing standing between them and
+    reinventing the same abstraction twice (measured on MINE: two disjoint
+    batches of biological-ish orphans independently minted 'biological
+    entity' and 'biological concept' for overlapping content).
+
+    Exact normalized-label match first (free, no embedding call). Then an
+    embedding-similarity check against every known label, since exact match
+    alone misses near-miss variants ('biological entity' vs 'biological
+    entity type' for the identical member set, also measured). Returns the
+    existing type_id to reuse, or None if this is genuinely new."""
+    norm = normalize_label(label)
+    with known_lock:
+        existing = known_labels.get(norm)
+        if existing is not None:
+            return existing
+        snapshot = dict(known_labels)
+
+    if embedder is None or not snapshot:
+        return None
+    try:
+        candidate_vec = embedder.embed([label], batch_size=1)[0]
+    except Exception:  # noqa: BLE001 -- collision check is best-effort, never blocks minting
+        logger.debug("collision-check embed failed for %r; skipping near-duplicate check", label)
+        return None
+
+    known_ids = [tid for tid in snapshot.values() if tid in embedding_by_id]
+    if not known_ids:
+        return None
+    known_matrix = np.stack([embedding_by_id[tid] for tid in known_ids])
+    sims = 1.0 - cosine_distances(candidate_vec.reshape(1, -1), known_matrix)[0]
+    best_idx = int(np.argmax(sims))
+    if sims[best_idx] >= threshold:
+        return known_ids[best_idx]
+    return None
+
+
+def _regroup_level(
+    candidate_ids: list[str],
+    current_anchor: Optional[str],
+    pool: dict[str, _Node],
+    all_nodes: dict[str, _Node],
+    edges: list[HierarchyEdge],
+    synthesized: list[SynthesizedType],
+    synthetic_counter: list[int],
+    counter_lock: threading.Lock,
+    known_labels: dict[str, str],
+    known_lock: threading.Lock,
+    embedding_by_id: dict[str, np.ndarray],
+    embedder,
+    embed_lock: threading.Lock,
+    llm_extractor,
+    config: HierarchyConfig,
+    roots: set[str],
+) -> list[str]:
+    """Consolidate an overflowing level down to <= config.candidate_batch_size
+    by grouping true siblings under an invented (or REUSED -- see
+    _check_collision) shared parent. Every consumed member is reparented
+    under its group's parent, which takes the members' place at this same
+    level -- no respawn/re-placement needed, since regroup is only ever
+    answering "what capacity-managing structure does THIS level need", not a
+    general "are these related" judgment (that's what made the old
+    unbounded same_class mechanism dangerous: CLAUDE.md §6/§14 L2).
+
+    Runs under the caller's anchor lock already -- see _place_node."""
+    remaining = list(candidate_ids)
+    for _round in range(config.max_regroup_rounds):
+        if len(remaining) <= config.candidate_batch_size:
+            break
+        chunk = remaining[: config.max_regroup_input]
+        rest = remaining[config.max_regroup_input:]
+        labels_by_id = {tid: all_nodes[tid].label for tid in chunk}
+        label_to_id = {label: tid for tid, label in labels_by_id.items()}
+        try:
+            groups = llm_extractor.regroup_hierarchy_siblings(list(labels_by_id.values()))
+        except Exception:
+            logger.exception("regroup_hierarchy_siblings failed; leaving this level unconsolidated")
+            groups = []
+
+        consumed: set[str] = set()
+        new_ids: list[str] = []
+        for g in groups:
+            member_ids = [label_to_id[m] for m in (g.get("members") or []) if m in label_to_id]
+            member_ids = [m for m in member_ids if m not in consumed]
+            if len(member_ids) < 2:
+                continue
+            new_label = str(g.get("label") or "").strip()
+            if not new_label:
+                continue
+
+            existing_id = _check_collision(
+                new_label, known_labels, known_lock, embedding_by_id, embedder,
+                config.label_collision_threshold,
+            )
+            if existing_id is not None and existing_id in all_nodes:
+                new_id = existing_id
+            else:
+                new_id = None  # decided below, once we know at least one member can safely attach
+
+            # A candidate member that is ALREADY an ancestor of new_id (or,
+            # in the reuse case, literally new_id itself -- e.g. the group's
+            # own proposed label collided with one of its OWN members'
+            # labels) must not be reparented under it: that would loop the
+            # tree back on itself. Measured without this guard: 244
+            # self-loops on a real MINE run.
+            safe_member_ids = [
+                m for m in member_ids
+                if not (new_id is not None and _is_ancestor_or_self(m, new_id, edges))
+            ]
+            dropped = [m for m in member_ids if m not in safe_member_ids]
+            if dropped:
+                logger.warning(
+                    "regroup: dropping member(s) %r from group %r -- would create a cycle",
+                    [labels_by_id.get(m, m) for m in dropped], new_label,
+                )
+            if len(safe_member_ids) < 2 and existing_id is None:
+                continue  # nothing safe left to justify minting a brand-new node
+            member_ids = safe_member_ids
+            if not member_ids:
+                continue
+
+            if new_id is None:
+                new_id = _next_synthetic_id("type_h", synthetic_counter, counter_lock)
+                new_node = _Node(
+                    type_id=new_id, label=new_label, profile={}, is_leaf=False,
+                    definition=str(g.get("definition") or ""),
+                )
+                all_nodes[new_id] = new_node
+                synthesized.append(SynthesizedType(
+                    type_id=new_id, canonical_label=new_label, definition=new_node.definition,
+                    child_type_ids=list(member_ids),
+                ))
+                _embed_inline(new_id, new_node, embedder, embedding_by_id, embed_lock)
+                with known_lock:
+                    known_labels[normalize_label(new_label)] = new_id
+            else:
+                new_node = all_nodes[new_id]
+                logger.info(
+                    "regroup: reusing existing label %r (%s) instead of minting a duplicate for %r",
+                    new_node.label, new_id, [labels_by_id.get(m, m) for m in member_ids],
+                )
+
+            for member_id in member_ids:
+                _reparent(member_id, new_id, edges, all_nodes, 0.5)
+                pool.pop(member_id, None)
+                roots.discard(member_id)
+                consumed.add(member_id)
+
+            if new_id != existing_id:
+                if current_anchor is not None:
+                    anchor_node = all_nodes[current_anchor]
+                    edges.append(_make_edge(new_id, current_anchor, new_node.profile, anchor_node.profile, 0.5))
+                else:
+                    roots.add(new_id)
+            new_ids.append(new_id)
+
+        if not consumed:
+            logger.warning(
+                "regroup made no progress on an oversized level (%d candidates); "
+                "leaving it over the %d-candidate cap", len(remaining), config.candidate_batch_size,
+            )
+            break
+        survivors = list(dict.fromkeys([tid for tid in chunk if tid not in consumed] + new_ids))
+        remaining = survivors + rest
+
+    return remaining
+
+
 def _place_node(
     focal_id: str,
     pool: dict[str, _Node],
@@ -856,165 +1001,175 @@ def _place_node(
     edges: list[HierarchyEdge],
     synthesized: list[SynthesizedType],
     synthetic_counter: list[int],
-    relation_vocab: "RelationDeduplicationResult",
     llm_extractor,
     embedding_by_id: dict[str, np.ndarray],
     config: HierarchyConfig,
     unresolved_children: dict[str, list[str]],
-    anchor_locks: _AnchorLocks,
+    anchor_locks: "_AnchorLocks",
     counter_lock: threading.Lock,
+    roots: set[str],
+    known_labels: dict[str, str],
+    known_lock: threading.Lock,
+    examples_by_type: dict[str, list[str]],
+    embedder=None,
+    embed_lock: Optional[threading.Lock] = None,
+    start_anchor: Optional[str] = None,
+    start_depth: int = 0,
 ) -> None:
-    """Route one focal node from the top of the current pool down through
-    the tree, applying the four-way decision at each level. Terminates via
-    exactly one of: merged away (same_concept), replaced by a freshly
-    synthesized shared parent (same_class), attached with a normal
-    confirmed edge (parent chain bottoming out, or a "child" absorption
-    settling focal at its current level), deferred into
-    unresolved_children (max_depth reached), or left untouched in `pool` as
-    a root (no candidates, or every batch came back "none", at the top
-    level).
+    """Route one focal node through the tree via two directional questions
+    per level, asked separately rather than as one five-way choice:
 
-    Each iteration's candidate-read/LLM-call/decision-apply sequence runs
-    under `anchor_locks.acquire(current_anchor)` (CLAUDE.md §16.2.4): two
-    nodes currently comparing against the SAME anchor's candidates can never
-    have their steps interleaved, since acting on a stale read of that
-    anchor's children (e.g. two nodes independently claiming the same
-    existing child, or independently inventing two different same_class
-    parents for it) would otherwise be a real race. Nodes at DIFFERENT
-    anchors hold different locks and run their steps -- including the LLM
-    call itself -- fully concurrently. When called with `anchor_locks`
-    single-threaded (band 1), this still works correctly; the locking is
-    just uncontended overhead."""
-    depth = 0
-    current_anchor: Optional[str] = None   # None == top level, candidates drawn from `pool`
+      1. PARENT CHECK -- does focal belong under any of the level's current
+         candidates? If yes, descend into that candidate's children next
+         (depth += 1). A "same_concept" flag on this answer means focal and
+         the match are the identical concept -- collapse rather than
+         descend.
+      2. CHILD CHECK -- only asked if (1) found nothing -- does focal
+         subsume any of the level's current candidates? If yes, retroactively
+         insert focal above them (_reparent) and focal settles at this level.
+      3. Neither: focal settles at this level with no relation asserted (a
+         new root, or a plain sibling under the current anchor).
+
+    Before EITHER question is asked, the level currently in front of focal
+    (the live root set, or current_anchor's children) is proactively
+    consolidated via _regroup_level if it exceeds config.candidate_batch_size
+    -- so a level is never larger than one call can show, and no
+    escalation/ranking machinery is needed to decide what a focal node gets
+    to see."""
+    depth = start_depth
+    current_anchor: Optional[str] = start_anchor
 
     while depth < config.max_depth:
         with anchor_locks.acquire(current_anchor):
             if focal_id not in pool:
-                # Consumed by a concurrently-placed sibling (e.g. claimed as
-                # a "child", or merged via same_concept) under a DIFFERENT
-                # anchor's lock before this node's own turn came up --
-                # nothing left to place. Cheap efficiency/determinism
-                # guard, not a correctness requirement: _reparent() and
-                # _collapse_duplicate_nodes() already re-scan `edges` fresh
-                # rather than trust a stale snapshot, so a race that slips
-                # past this check still can't produce a double-parented
-                # node -- it would just waste the LLM call this check
-                # avoids.
+                # Consumed by a concurrently-placed sibling under a
+                # DIFFERENT anchor's lock before this node's own turn came
+                # up -- nothing left to place.
                 return
 
+            children_map = _build_children_map(edges)
             if current_anchor is None:
-                candidate_ids = [tid for tid in pool if tid != focal_id]
+                candidate_ids = [tid for tid in roots if tid != focal_id and tid in all_nodes]
             else:
+                candidate_ids = [
+                    cid for cid in children_map.get(current_anchor, [])
+                    if cid in all_nodes and cid != focal_id
+                ]
+
+            if len(candidate_ids) > config.candidate_batch_size:
+                candidate_ids = _regroup_level(
+                    candidate_ids, current_anchor, pool, all_nodes, edges, synthesized,
+                    synthetic_counter, counter_lock, known_labels, known_lock,
+                    embedding_by_id, embedder, embed_lock, llm_extractor, config, roots,
+                )
                 children_map = _build_children_map(edges)
-                candidate_ids = [cid for cid in children_map.get(current_anchor, []) if cid in all_nodes]
+                if current_anchor is None:
+                    candidate_ids = [tid for tid in roots if tid != focal_id and tid in all_nodes]
+                else:
+                    candidate_ids = [
+                        cid for cid in children_map.get(current_anchor, [])
+                        if cid in all_nodes and cid != focal_id
+                    ]
 
             if not candidate_ids:
                 break
 
-            decision, matched_ids = _resolve_with_batched_escalation(
-                focal_id, candidate_ids, all_nodes, embedding_by_id, relation_vocab, llm_extractor, config,
+            focal_node = all_nodes[focal_id]
+            candidate_nodes = [all_nodes[cid] for cid in candidate_ids]
+            focal_ctx = _node_context(
+                focal_node, examples_by_type,
+                _subclass_labels(focal_id, children_map, all_nodes, config.context_max_subclasses),
             )
-            if decision is None:
-                break  # exhausted escalation without a conclusive answer
+            candidate_ctx = {
+                n.label: _node_context(
+                    n, examples_by_type,
+                    _subclass_labels(n.type_id, children_map, all_nodes, config.context_max_subclasses),
+                )
+                for n in candidate_nodes
+            }
+            candidate_labels = [n.label for n in candidate_nodes]
+            label_to_id = {n.label: n.type_id for n in candidate_nodes}
 
-            relation = decision["relation"]
             try:
-                confidence = float(decision.get("confidence", 0.5))
-            except (TypeError, ValueError):
-                confidence = 0.5
+                parent_result = llm_extractor.check_hierarchy_parent(
+                    focal_label=focal_node.label, focal_context=focal_ctx,
+                    candidate_labels=candidate_labels, candidate_context=candidate_ctx,
+                )
+            except Exception:
+                logger.exception("check_hierarchy_parent failed for %r; treating as no match", focal_node.label)
+                parent_result = {"parent": None}
 
-            if relation == "parent":
-                # focal IS-A matched_ids[0]: descend into its own children
-                # next iteration, rather than attaching yet -- an edge only
-                # gets created once descent bottoms out (see the "settle"
-                # step below), so a deeper, more specific attachment never
-                # has to be undone. "parent" only ever resolves to one
-                # candidate (CLAUDE.md §16.2.2c) -- a single-parent forest
-                # can't have focal descend into two branches at once.
-                current_anchor = matched_ids[0]
+            parent_label = parent_result.get("parent") if isinstance(parent_result, dict) else None
+            matched_id = label_to_id.get(parent_label) if parent_label else None
+            if matched_id is not None:
+                if parent_result.get("same_concept"):
+                    merged_ids = [focal_id, matched_id]
+                    survivor_id = _collapse_duplicate_nodes(merged_ids, pool, all_nodes, edges, synthesized)
+                    for tid in merged_ids:
+                        if tid != survivor_id:
+                            roots.discard(tid)
+                    if survivor_id in pool:
+                        if current_anchor is None:
+                            roots.add(survivor_id)
+                    else:
+                        roots.discard(survivor_id)
+                    return
+                current_anchor = matched_id
                 depth += 1
                 continue
 
-            if relation == "child":
-                # Every id in matched_ids IS-A focal: retroactively insert
-                # focal above ALL of them in this one call (CLAUDE.md
-                # §16.2.2's multi-candidate requirement -- claiming only
-                # one per call and hoping a later call catches the rest
-                # would leave the tree in a partially-corrected state,
-                # since nothing guarantees a later call ever re-examines
-                # the ones left behind). Each _reparent() call further
-                # enriches focal's absorbed profile, so order within the
-                # loop doesn't matter. Once focal absorbs its matched
-                # children, it settles at the current level rather than
-                # continuing to search for an even-more-general position
-                # in the same call -- a later pass (e.g. a future
-                # extension of a resumed unresolved_children bucket) can
-                # still discover that focal itself belongs even higher.
-                for matched_id in matched_ids:
-                    _reparent(matched_id, focal_id, edges, all_nodes, confidence)
-                    pool.pop(matched_id, None)
+            try:
+                child_result = llm_extractor.check_hierarchy_children(
+                    focal_label=focal_node.label, focal_context=focal_ctx,
+                    candidate_labels=candidate_labels, candidate_context=candidate_ctx,
+                )
+            except Exception:
+                logger.exception("check_hierarchy_children failed for %r; treating as no match", focal_node.label)
+                child_result = {"children": []}
+
+            child_labels = (child_result.get("children") or []) if isinstance(child_result, dict) else []
+            matched_ids = [label_to_id[c] for c in child_labels if c in label_to_id]
+            cyclic = [mid for mid in matched_ids if _is_ancestor_or_self(mid, focal_id, edges)]
+            if cyclic:
+                logger.warning(
+                    "Rejecting child claim(s) by %r: %s would create a cycle (already an ancestor)",
+                    focal_node.label, [all_nodes[m].label for m in cyclic],
+                )
+                matched_ids = [mid for mid in matched_ids if mid not in cyclic]
+            if matched_ids and len(matched_ids) > 3 and len(matched_ids) > config.max_child_claim_share * len(candidate_ids):
+                logger.warning(
+                    "Rejecting 'child' claim by %r: claimed %d of %d candidates -- "
+                    "pathology backstop, treating as no match", focal_node.label, len(matched_ids), len(candidate_ids),
+                )
+                matched_ids = []
+            if matched_ids:
+                try:
+                    child_confidence = float(child_result.get("confidence", 0.8))
+                except (TypeError, ValueError):
+                    child_confidence = 0.8
+                for mid in matched_ids:
+                    _reparent(mid, focal_id, edges, all_nodes, child_confidence)
+                    pool.pop(mid, None)
+                    roots.discard(mid)
                 break
 
-            if relation == "same_concept":
-                _collapse_duplicate_nodes([focal_id, matched_ids[0]], pool, all_nodes, edges, synthesized)
-                return
+            break  # neither check matched anything -- settle here
 
-            if relation == "same_class":
-                matched_id = matched_ids[0]
-                new_label = str(decision.get("new_parent_label", "")).strip()
-                if not new_label:
-                    logger.warning("same_class proposed with no new_parent_label; treating focal %s as unresolved", focal_id)
-                    break
-                new_id = _next_synthetic_id("type_h", synthetic_counter, counter_lock)
-                focal_node = all_nodes[focal_id]
-                candidate_node = all_nodes[matched_id]
-                new_node = _Node(
-                    type_id=new_id, label=new_label,
-                    profile=_merge_profiles([focal_node.profile, candidate_node.profile]),
-                    is_leaf=False, definition=str(decision.get("new_parent_definition", "") or ""),
-                )
-                pool[new_id] = new_node
-                all_nodes[new_id] = new_node
-                synthesized.append(SynthesizedType(
-                    type_id=new_id, canonical_label=new_label, definition=new_node.definition,
-                    child_type_ids=[focal_id, matched_id],
-                ))
-                for cid in (focal_id, matched_id):
-                    cnode = all_nodes[cid]
-                    edges.append(_make_edge(cid, new_id, cnode.profile, new_node.profile, confidence))
-                    pool.pop(cid, None)
-                return
-
-            break  # unrecognized relation value; treat like "none"
-
-    # Both of the following mutate shared state keyed by current_anchor
-    # (unresolved_children / pool / edges), same as every step inside the
-    # loop above -- acquire that anchor's lock here too rather than leave
-    # this tail end unprotected.
     with anchor_locks.acquire(current_anchor):
         if depth >= config.max_depth:
-            # Deferred, not destroyed -- see module docstring and CLAUDE.md
-            # §16.2.7. current_anchor may be None (deferred right at the top
-            # level, e.g. a pathologically deep chain of "parent" descents
-            # before ever settling) -- bucket key "" represents that case.
             bucket_key = current_anchor or ""
             unresolved_children.setdefault(bucket_key, []).append(focal_id)
             pool.pop(focal_id, None)
             return
 
         if current_anchor is not None and focal_id in pool:
-            # Settled: either a "parent" chain bottomed out (no further
-            # child fit), or a "child" absorption just happened and focal
-            # itself now belongs at current_anchor's level.
             focal_node = pool[focal_id]
             anchor_node = all_nodes[current_anchor]
-            anchor_node.profile = _merge_profiles([anchor_node.profile, focal_node.profile])
             edges.append(_make_edge(focal_id, current_anchor, focal_node.profile, anchor_node.profile, 0.5))
             pool.pop(focal_id, None)
-        # else current_anchor is None: focal never matched anything at the
-        # top level and simply stays in `pool` as a root -- no action
-        # needed, it's already there.
+        elif focal_id in pool:
+            roots.add(focal_id)
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1025,6 +1180,7 @@ def induce_hierarchy(
     type_vocab: DeduplicationResult,
     relation_vocab: "RelationDeduplicationResult",
     llm_extractor,
+    triplets: Optional[list[dict]] = None,
     *,
     contriever_model: str = "facebook/contriever",
     device: str = None,
@@ -1032,24 +1188,45 @@ def induce_hierarchy(
 ) -> HierarchyInductionResult:
     """
     Induce a subClassOf hierarchy over the flat type vocabulary T* via a
-    single priority-ordered pass -- see the module docstring and CLAUDE.md
-    §16 for the full design.
+    single priority-ordered pass.
 
     Requires relation_vocab's CanonicalRelation.subject_types / object_types
     to already hold canonical type_ids (relation_dedup.update_relation_type_map()
-    must have been called first) so relation-signature profiles can be built
+    must have been called first) so priority-band in-degree can be computed
     directly at the type_id level.
+
+    `triplets` (the same raw list pipeline.load_triplets() produces) supplies
+    real corpus EXAMPLES per type for placement context -- see
+    HierarchyConfig.context_max_examples. None/empty means every node's
+    context is definition + subclasses only, no examples (a degraded but
+    still-functional mode, e.g. for a caller that only has vocabularies).
     """
     config = config or HierarchyConfig()
     embedder = ContrieverEmbedder(model_name=contriever_model, device=device)
 
-    pool = _initial_pool(type_vocab, relation_vocab, config)
+    pool, deferred_low_support = _initial_pool(type_vocab, relation_vocab, config)
     all_nodes: dict[str, _Node] = dict(pool)
     edges: list[HierarchyEdge] = []
     synthesized: list[SynthesizedType] = []
     synthetic_counter = [0]
     counter_lock = threading.Lock()   # protects synthetic_counter across concurrently-placed bands 2+
     unresolved_children: dict[str, list[str]] = defaultdict(list)
+    examples_by_type = _collect_type_examples(triplets or [], type_vocab, config.context_max_examples)
+
+    # The tree's live top level. Distinct from `pool`, which also holds
+    # nodes that simply have not been routed yet -- conflating the two is
+    # what let unplaced nodes act as top-level candidates.
+    roots: set[str] = set()
+    embed_lock = threading.Lock()
+
+    # Every label currently in play (real T* types + anything synthesized so
+    # far this run), normalized -> type_id. The ONLY defense against two
+    # independent regroup calls reinventing the same abstraction under
+    # different names -- see _check_collision.
+    known_labels: dict[str, str] = {
+        normalize_label(node.label): tid for tid, node in all_nodes.items()
+    }
+    known_lock = threading.Lock()
 
     pinned_roots: set[str] = set()
     if config.seed_roots:
@@ -1059,6 +1236,7 @@ def induce_hierarchy(
             "Seeded with %d pinned root(s): %s (%d nested seed edge(s) below them)",
             len(pinned_roots), sorted(pool[r].label for r in pinned_roots), num_seed_edges,
         )
+        roots |= pinned_roots
 
     bands = _priority_bands(pool, pinned_roots, config)
     logger.info(
@@ -1101,8 +1279,9 @@ def induce_hierarchy(
                     continue  # consumed earlier this band (e.g. absorbed as someone's child, or merged away)
                 _place_node(
                     focal_id, pool, all_nodes, edges, synthesized, synthetic_counter,
-                    relation_vocab, llm_extractor, embedding_by_id, config, unresolved_children,
-                    anchor_locks, counter_lock,
+                    llm_extractor, embedding_by_id, config, unresolved_children,
+                    anchor_locks, counter_lock, roots, known_labels, known_lock, examples_by_type,
+                    embedder=embedder, embed_lock=embed_lock,
                 )
         else:
             # Bands 2+: nodes may already be anchored under different,
@@ -1114,15 +1293,31 @@ def induce_hierarchy(
                 futures = {
                     executor.submit(
                         _place_node, focal_id, pool, all_nodes, edges, synthesized, synthetic_counter,
-                        relation_vocab, llm_extractor, embedding_by_id, config, unresolved_children,
-                        anchor_locks, counter_lock,
+                        llm_extractor, embedding_by_id, config, unresolved_children,
+                        anchor_locks, counter_lock, roots, known_labels, known_lock, examples_by_type,
+                        embedder=embedder, embed_lock=embed_lock,
                     ): focal_id
                     for focal_id in band if focal_id in pool
                 }
                 for future in tqdm(as_completed(futures), total=len(futures), desc=f"Priority band {band_idx}/{len(bands)}"):
                     future.result()  # re-raise any worker exception instead of silently swallowing it
 
-    hierarchy = _build_type_hierarchy(edges, roots=list(pool.keys()))
+    # Registered roots, plus two defensive catches: a node that parents
+    # something but was never itself given a parent (e.g. a regroup-minted
+    # node whose own settle step hit max_depth) would otherwise leave its
+    # whole subtree unreachable from hierarchy.roots; and anything still
+    # sitting in `pool` unrouted. Minus, in all cases, anything that does have a
+    # parent edge.
+    parented = {e.child_type_id for e in edges}
+    subtree_tops = {e.parent_type_id for e in edges}
+    final_roots = (roots | subtree_tops | set(pool)) - parented
+    stray = final_roots - roots
+    if stray:
+        logger.warning(
+            "%d root(s) recovered defensively (parentless but unregistered): %s",
+            len(stray), sorted(all_nodes[t].label for t in stray if t in all_nodes)[:10],
+        )
+    hierarchy = _build_type_hierarchy(edges, roots=sorted(final_roots))
     num_unresolved = sum(len(v) for v in unresolved_children.values())
     logger.info(
         "Hierarchy induction complete: %d root(s), %d edge(s), %d synthesized type(s), "
@@ -1133,6 +1328,7 @@ def induce_hierarchy(
     return HierarchyInductionResult(
         hierarchy=hierarchy, synthesized_types=synthesized,
         unresolved_children=dict(unresolved_children),
+        deferred_low_support=deferred_low_support,
     )
 
 

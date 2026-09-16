@@ -17,14 +17,6 @@ from src.ontodisco.utils.dedup_base import (
 
 logger = logging.getLogger(__name__)
 
-# Candidate generation used to be FAISS nearest-neighbor search + union-find
-# (chosen for scalability over a full O(N^2) HAC pass). Replaced with
-# dedup_base.cluster_hdbscan(), which clusters the full pairwise cosine
-# distance matrix directly -- this reintroduces O(N^2) memory (this corpus's
-# relation vocabulary is ~10k raw surface forms, i.e. a ~400MB float32
-# distance matrix: workable here, but a real trade-off relative to FAISS's
-# O(N x top_k) footprint for much larger vocabularies).
-
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Data Structures
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -42,7 +34,7 @@ class CanonicalRelation(CanonicalItem):
 
 @dataclass
 class RelationDeduplicationResult(DeduplicationResult):
-    """Full output of entity name canonicalization."""
+    """Full output of relation name canonicalization."""
 
     @property
     def relations(self) -> dict[str, CanonicalRelation]:
@@ -67,26 +59,36 @@ class RelationDeduplicationResult(DeduplicationResult):
 
 def collect_relation_surface_forms(
     triplets: list[dict],
+    *,
+    include_qualifiers: bool = True,
 ) -> list[str]:
     """
-    Collect all relation surface forms from triplets as compound labels.
+    Collect all relation surface forms from triplets as plain labels.
 
-    Each triplet mention with a non-empty type produces a "name [type]"
-    compound label. Mentions without a type are skipped.
+    include_qualifiers also folds each qualifier's own `relation` into the
+    same vocabulary. 
 
-    Returns all compound labels (with duplicates).
+    Returns all labels (with duplicates).
     """
     all_relation_surface_forms: list[str] = []
+    num_qualifier_relations = 0
 
     for triplet in triplets:
-        raw_relation = triplet.get("relation", "").strip()
-        if not raw_relation:
-            continue
-        all_relation_surface_forms.append(raw_relation)
+        raw_relation = (triplet.get("relation") or "").strip()
+        if raw_relation:
+            all_relation_surface_forms.append(raw_relation)
+        if include_qualifiers:
+            for qualifier in (triplet.get("qualifiers") or []):
+                if not isinstance(qualifier, dict):
+                    continue
+                q_relation = (qualifier.get("relation") or "").strip()
+                if q_relation:
+                    all_relation_surface_forms.append(q_relation)
+                    num_qualifier_relations += 1
 
     logger.info(
-        "Collected %d relation mentions from %d triplets",
-        len(all_relation_surface_forms), len(triplets),
+        "Collected %d relation mentions from %d triplets (%d of them qualifier predicates)",
+        len(all_relation_surface_forms), len(triplets), num_qualifier_relations,
     )
 
     return all_relation_surface_forms
@@ -107,18 +109,15 @@ def deduplicate_relations(
     max_merge_rounds: int = 5,
     max_parallel_workers: int = 8,
     max_cluster_size: int = 40,
+    include_qualifiers: bool = True,
 ) -> RelationDeduplicationResult:
     """
-    Full entity name deduplication with type-aware compound labels.
+    Full relation name deduplication.
 
     Candidate generation is HDBSCAN over the full pairwise cosine-distance
     matrix (dedup_base.cluster_hdbscan()): similarity_threshold sets HDBSCAN's
     cluster_selection_epsilon, and within that similarity band, variable-
     density substructure can form separate clusters rather than one flat cut.
-
-    Relation mentions are represented as compound "name [type]" labels.
-    This ensures that homonymous entities with different types (e.g.
-    "Paris [city]" vs "Paris [person]") are never merged.
 
     Args:
         triplets:             List of triplet dicts from extraction.
@@ -145,18 +144,32 @@ def deduplicate_relations(
     relation_2_subject_types = defaultdict(set)
     relation_2_object_types = defaultdict(set)
     for triplet in triplets:
-        relation = triplet.get("relation", "").strip()
-        if not relation:
+        relation = (triplet.get("relation") or "").strip()
+        if relation:
+            relation_2_subject_types[relation].add((triplet.get("subject_type") or "").strip())
+            relation_2_object_types[relation].add((triplet.get("object_type") or "").strip())
+        if not include_qualifiers:
             continue
-        relation_2_subject_types[relation].add(triplet.get("subject_type", "").strip())
-        relation_2_object_types[relation].add(triplet.get("object_type", "").strip())
+        # A qualifier predicate's "subject" is the STATEMENT it qualifies, not an
+        # entity, so it contributes an object type only -- leaving its subject
+        # side empty rather than inventing one. Step 5 reads these two sets
+        # separately (domain vs range), so a one-sided contribution is safe.
+        for qualifier in (triplet.get("qualifiers") or []):
+            if not isinstance(qualifier, dict):
+                continue
+            q_relation = (qualifier.get("relation") or "").strip()
+            q_object_type = (qualifier.get("object_type") or "").strip()
+            if q_relation and q_object_type:
+                relation_2_object_types[q_relation].add(q_object_type)
 
     logger.info(
         "Collected %d relation subject types and %d relation object types from %d triplets",
         len(relation_2_subject_types), len(relation_2_object_types), len(triplets),
     )
 
-    all_relation_surface_forms = collect_relation_surface_forms(triplets)
+    all_relation_surface_forms = collect_relation_surface_forms(
+        triplets, include_qualifiers=include_qualifiers,
+    )
 
 
     embedder = ContrieverEmbedder(model_name=contriever_model, device=device)
@@ -164,12 +177,7 @@ def deduplicate_relations(
     def _build_relation(item_id, canonical_label, surface_forms, count_per_normalized,
                       surface_form_counts):
         # Union over every raw surface form actually folded into this
-        # canonical relation, not a lookup keyed by canonical_label: the
-        # LLM-chosen canonical_label is frequently not identical to any raw
-        # relation string (more so once merge rounds compound further, see
-        # deduplicate_with_rounds), so a canonical_label-keyed lookup into
-        # relation_2_subject_types/object_types (keyed by raw strings) would
-        # silently come back empty for exactly the relations that merged.
+        # canonical relation
         subject_types: set[str] = set()
         object_types: set[str] = set()
         for sf in surface_forms:
