@@ -1,0 +1,298 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; font-family: -apple-system, Segoe UI, sans-serif; overflow: hidden; }
+  #topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 4px 8px; box-sizing: border-box;
+  }
+  #tree { width: 100%; }
+  .link { fill: none; stroke: #b0b0b0; stroke-width: 1.5px; }
+  .node circle { stroke-width: 2px; cursor: grab; }
+  .node circle.dragging { cursor: grabbing; opacity: 0.6; }
+  .node circle.drop-target { stroke: #2e7d32; stroke-width: 4px; }
+  .node circle.drop-invalid { stroke: #c62828; stroke-width: 4px; }
+  .node text { font-size: 11px; fill: #222; pointer-events: none; }
+  .node.root circle { fill: #4C72B0; stroke: #2f4d78; }
+  .node.internal circle { fill: #DD8452; stroke: #a4602f; }
+  .node.leaf circle { fill: #55A868; stroke: #327142; }
+  .node.highlight circle { stroke: #f9a825; stroke-width: 4px; }
+  .node.synthetic-root circle { fill: #cccccc; r: 3; }
+  .node circle.selected-source { stroke: #1565c0; stroke-width: 4px; stroke-dasharray: 3,2; }
+  #hint { font-size: 12px; color: #666; }
+  #hint.pending { color: #1565c0; font-weight: 600; }
+  #zoom-controls { display: flex; gap: 4px; }
+  #zoom-controls button {
+    width: 24px; height: 24px; border: 1px solid #ccc; border-radius: 4px; background: #fff;
+    cursor: pointer; font-size: 14px; line-height: 1; padding: 0;
+  }
+  #zoom-controls button:hover { background: #f0f0f0; }
+</style>
+</head>
+<body>
+<div id="topbar">
+  <div id="hint">Drag a node onto a new parent, or click a node then click its new parent (works across pans/zooms). Scroll/pinch or use the buttons to zoom.</div>
+  <div id="zoom-controls">
+    <button id="zoom-out" title="Zoom out">−</button>
+    <button id="zoom-reset" title="Reset zoom">⟲</button>
+    <button id="zoom-in" title="Zoom in">+</button>
+  </div>
+</div>
+<div id="tree"></div>
+<script src="./vendor/d3.min.js"></script>
+<script>
+// ── Streamlit component wire protocol (hand-written; see __init__.py docstring) ──
+const SYNTHETIC_ROOT = "__forest_root__";
+let currentArgs = null;
+let currentZoomBehavior = null;   // re-assigned on every render() call
+let currentSvg = null;
+
+document.getElementById("zoom-in").addEventListener("click", () => {
+  if (currentSvg && currentZoomBehavior) currentSvg.transition().duration(200).call(currentZoomBehavior.scaleBy, 1.3);
+});
+document.getElementById("zoom-out").addEventListener("click", () => {
+  if (currentSvg && currentZoomBehavior) currentSvg.transition().duration(200).call(currentZoomBehavior.scaleBy, 1 / 1.3);
+});
+document.getElementById("zoom-reset").addEventListener("click", () => {
+  if (currentSvg && currentZoomBehavior) currentSvg.transition().duration(200).call(currentZoomBehavior.transform, d3.zoomIdentity);
+});
+
+function sendToStreamlit(type, payload) {
+  window.parent.postMessage(Object.assign({ type, isStreamlitMessage: true }, payload), "*");
+}
+function setFrameHeight(h) { sendToStreamlit("streamlit:setFrameHeight", { height: h }); }
+function setComponentValue(value) { sendToStreamlit("streamlit:setComponentValue", { value, dataType: "json" }); }
+
+function showError(err) {
+  const el = document.getElementById("tree");
+  if (el) el.innerText = "Reparent tree failed to render: " + err;
+  setFrameHeight(80);
+}
+// Nothing above this point is allowed to fail silently: an uncaught
+// exception inside a postMessage handler is swallowed by the browser with
+// no visible trace on the page, which is exactly what made an earlier bug
+// here (missing d3.stratify() parent) look like "nothing renders" instead
+// of a legible error.
+window.onerror = (msg, src, line, col, err) => { showError(err || msg); return false; };
+
+let gotFirstRender = false;
+window.addEventListener("message", (event) => {
+  const data = event.data;
+  // NOTE: unlike component -> host messages (componentReady, setComponentValue,
+  // setFrameHeight), which Streamlit's ComponentRegistry validates via an
+  // isStreamlitMessage property, the host -> component "streamlit:render"
+  // message does NOT carry that property (confirmed against Streamlit
+  // 1.40.1's own sendRenderMessage(), which posts only
+  // {type, args, dfs, disabled, theme}). Gating on it here silently dropped
+  // every render message. Match on `type` alone for incoming messages.
+  if (!data || typeof data !== "object") return;
+  if (data.type === "streamlit:render") {
+    gotFirstRender = true;
+    currentArgs = data.args;
+    try {
+      render(currentArgs);
+    } catch (err) {
+      showError(err);
+    }
+  }
+});
+if (typeof d3 === "undefined") {
+  showError("d3.min.js did not load (check the component's vendor/ path).");
+} else {
+  // Streamlit's protocol explicitly allows redundant componentReady messages
+  // ("not an error to get multiple... we always respond with the most
+  // recent render arguments" -- componentUtils.tsx), so retry defensively
+  // in case the very first one ever raced the host's listener registration
+  // -- cheap, and it stops itself the moment a render actually lands.
+  sendToStreamlit("streamlit:componentReady", { apiVersion: 1 });
+  const retry = setInterval(() => {
+    if (gotFirstRender) { clearInterval(retry); return; }
+    sendToStreamlit("streamlit:componentReady", { apiVersion: 1 });
+  }, 200);
+  setTimeout(() => clearInterval(retry), 5000);
+}
+
+// ── Cycle check mirrored client-side (UX only -- server re-validates authoritatively) ──
+function wouldCreateCycle(childId, newParentId, parentOf) {
+  let cur = newParentId;
+  const seen = new Set();
+  while (cur !== undefined && cur !== null) {
+    if (cur === childId) return true;
+    if (seen.has(cur)) break;
+    seen.add(cur);
+    cur = parentOf[cur];
+  }
+  return false;
+}
+
+function render(args) {
+  const nodesIn = args.nodes || [];
+  const edgesIn = args.edges || [];
+  const highlight = new Set(args.highlight_ids || []);
+  const topbarHeight = document.getElementById("topbar").offsetHeight;
+  const height = (args.height || 600) - topbarHeight;
+
+  document.getElementById("tree").innerHTML = "";
+  const parentOf = {};
+  edgesIn.forEach(e => { parentOf[e.child] = e.parent; });
+
+  const stratifyRows = nodesIn.map(n => ({
+    id: n.id, parentId: parentOf[n.id] !== undefined ? parentOf[n.id] : SYNTHETIC_ROOT, label: n.label,
+  }));
+  stratifyRows.push({ id: SYNTHETIC_ROOT, parentId: null, label: "" });
+
+  let root;
+  try {
+    root = d3.stratify().id(d => d.id).parentId(d => d.parentId)(stratifyRows);
+  } catch (err) {
+    showError(err);
+    return;
+  }
+
+  // Horizontal (left-to-right) layout: d3.tree() always computes
+  // d.x = breadth position, d.y = depth position internally, regardless of
+  // visual orientation -- transform maps (d.y, d.x) to (horizontal,
+  // vertical) here, so depth grows rightward and siblings stack vertically.
+  // Preferred over top-down for this corpus once zoom/pan was added --
+  // reads more naturally for browsing a wide, shallow forest.
+  const dx = 26, dy = 180;   // sibling spacing (vertical), depth spacing (horizontal)
+  const treeLayout = d3.tree().nodeSize([dx, dy]);
+  treeLayout(root);
+
+  let x0 = Infinity, x1 = -Infinity;
+  root.each(d => { if (d.x < x0) x0 = d.x; if (d.x > x1) x1 = d.x; });
+  const breadthSpan = x1 - x0 + dx * 2;
+  const depthSpan = (root.height + 1) * dy + dy;
+
+  // The SVG's own box stays a FIXED, reasonable size -- with zoom/pan in
+  // place, the viewBox can hold the tree's full virtual extent (thousands
+  // of px for a large forest) without the iframe itself needing to be that
+  // tall; at zoom=1 (identity transform) the whole tree is shrunk to fit
+  // this fixed viewport, same as the old "fit everything" default, and the
+  // viewer zooms in from there. Sizing the iframe to the full extent
+  // instead (as an earlier version did) reserved thousands of px of blank
+  // page height for content that was mostly scrolled out of view anyway.
+  const svg = d3.select("#tree").append("svg")
+    .style("width", "100%")
+    .style("height", height + "px")
+    .style("display", "block")
+    .attr("viewBox", [-dy / 2, x0 - dx, depthSpan, breadthSpan]);
+
+  const g = svg.append("g");
+
+  // Pan/zoom: 343 nodes across 28 roots can't be legible at a fixed
+  // fit-to-width scale, so let the viewer zoom in on a region instead.
+  // .filter() excludes anything starting on a .node so panning never
+  // fights the node-drag-to-reparent behavior below.
+  const zoom = d3.zoom()
+    .scaleExtent([0.2, 8])
+    .filter((event) => !event.target.closest(".node"))
+    .on("zoom", (event) => { g.attr("transform", event.transform); });
+  svg.call(zoom);
+  currentZoomBehavior = zoom;
+  currentSvg = svg;
+
+  g.selectAll(".link")
+    .data(root.links().filter(l => l.source.id !== SYNTHETIC_ROOT))
+    .join("path")
+    .attr("class", "link")
+    .attr("d", d3.linkHorizontal().x(d => d.y).y(d => d.x));
+
+  const nodeSel = g.selectAll(".node")
+    .data(root.descendants().filter(d => d.id !== SYNTHETIC_ROOT))
+    .join("g")
+    .attr("class", d => "node " + (d.children ? (d.depth === 0 ? "root" : "internal") : "leaf")
+                       + (highlight.has(d.id) ? " highlight" : ""))
+    .attr("transform", d => `translate(${d.y},${d.x})`);
+
+  nodeSel.append("circle").attr("r", 6);
+  nodeSel.append("text")
+    .attr("dy", "0.32em")
+    .attr("x", d => (d.children ? -9 : 9))
+    .attr("text-anchor", d => (d.children ? "end" : "start"))
+    .text(d => d.data.label);
+
+  // ── Click-to-select-then-click-target (works across pans/zooms, unlike a
+  // drag gesture which needs source and target both reachable within one
+  // continuous mouse movement -- awkward or impossible once the tree is
+  // wider than the screen) ──
+  let pendingMoveSource = null;
+  const hintEl = document.getElementById("hint");
+  const baseHintText = hintEl.textContent;
+
+  function clearPendingSelection() {
+    pendingMoveSource = null;
+    nodeSel.select("circle").classed("selected-source", false);
+    hintEl.textContent = baseHintText;
+    hintEl.classList.remove("pending");
+  }
+
+  function handleNodeClick(event, d) {
+    event.stopPropagation();
+    if (!pendingMoveSource) {
+      pendingMoveSource = d;
+      d3.select(this).classed("selected-source", true);
+      hintEl.textContent = `Selected "${d.data.label}" -- click its new parent (click it again to cancel).`;
+      hintEl.classList.add("pending");
+      return;
+    }
+    if (pendingMoveSource.id === d.id) {
+      clearPendingSelection();
+      return;
+    }
+    if (!wouldCreateCycle(pendingMoveSource.id, d.id, parentOf)) {
+      setComponentValue({ moved: pendingMoveSource.id, new_parent: d.id });
+    } else {
+      hintEl.textContent = "Would create a cycle -- pick a different parent, or click the selected node again to cancel.";
+    }
+    clearPendingSelection();
+  }
+  svg.on("click", () => clearPendingSelection());
+  nodeSel.select("circle").on("click", handleNodeClick);
+
+  // ── Drag behavior (convenient when source and target are both already
+  // visible; use click-to-select above for anything further apart) ──
+  let dragLine = null;
+  let dropTarget = null;
+
+  const drag = d3.drag()
+    .clickDistance(5)   // tolerate a few px of jitter on an intended click without treating it as a drag
+    .on("start", function (event, d) {
+      d3.select(this).select("circle").classed("dragging", true);
+      dragLine = g.append("line")
+        .attr("stroke", "#999").attr("stroke-dasharray", "4,3")
+        .attr("x1", d.y).attr("y1", d.x).attr("x2", d.y).attr("y2", d.x);
+    })
+    .on("drag", function (event, d) {
+      dragLine.attr("x2", event.x).attr("y2", event.y);
+      nodeSel.select("circle").classed("drop-target", false).classed("drop-invalid", false);
+      dropTarget = null;
+      nodeSel.each(function (o) {
+        if (o.id === d.id) return;
+        const dx2 = o.y - event.x, dy2 = o.x - event.y;
+        if (Math.sqrt(dx2 * dx2 + dy2 * dy2) < 10) {
+          dropTarget = o;
+          const invalid = wouldCreateCycle(d.id, o.id, parentOf);
+          d3.select(this).select("circle").classed(invalid ? "drop-invalid" : "drop-target", true);
+        }
+      });
+    })
+    .on("end", function (event, d) {
+      d3.select(this).select("circle").classed("dragging", false);
+      if (dragLine) { dragLine.remove(); dragLine = null; }
+      nodeSel.select("circle").classed("drop-target", false).classed("drop-invalid", false);
+      if (dropTarget && dropTarget.id !== d.id && !wouldCreateCycle(d.id, dropTarget.id, parentOf)) {
+        setComponentValue({ moved: d.id, new_parent: dropTarget.id });
+      }
+      dropTarget = null;
+    });
+
+  nodeSel.select("circle").call(drag);
+
+  setFrameHeight(height + topbarHeight);
+}
+</script>
+</body>
+</html>
