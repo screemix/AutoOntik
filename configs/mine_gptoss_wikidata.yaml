@@ -1,0 +1,78 @@
+# configs/mine_gptoss_wikidata.yaml
+#
+# Identical to configs/mine_gptoss.yaml (same MINE corpus, same gpt-oss-120b
+# LLM settings, same tuned hierarchy/entity-dedup/constraint parameters) --
+# the only difference is hierarchy.seed_roots_path, pointing at the
+# Wikidata-derived seed tree (configs/seeds/wikidata.yaml: 8 root categories
+# -- part, type, result, abstract entity, collective entity, location,
+# spatio-temporal entity, individual entity -- each with up to 10 of their
+# own direct Wikidata subclasses nested beneath them, every label carrying
+# Wikidata's own item description). This is the first real-corpus run of
+# CLAUDE.md §15.3's Wikidata seed candidates (§15.5 previously listed this
+# as untried). Reuses the already-extracted MINE triplets
+# (data/mine/triplets_gptoss_v2.jsonl), same as run_13/14/15/18/19 -- no
+# re-extraction needed.
+#
+# Caveat carried over from configs/seeds/wikidata.yaml's own header:
+# Wikidata's class hierarchy is organic/community-edited, not curated the
+# way DOLCE is -- expect some roots (e.g. "location", "individual entity")
+# to be narrower or more idiosyncratic fits for a general essay corpus than
+# DOLCE's four philosophically-motivated basic categories were.
+
+corpus_id: "mine_gptoss_wikidata"
+input_path: "./data/mine/triplets_gptoss_v2.jsonl"
+output_dir: "./output/mine"
+language: "en"
+include_qualifiers: true
+
+llm:
+  model: "Openai/Gpt-oss-120b"
+  api_key_env: "AIRI_KEY"
+  base_url: "https://inference.airi.net:46783/v1"
+  proxy_key_env: "PROXY_URL"
+
+embedding:
+  contriever_model: "facebook/contriever"
+  device: null
+  embed_batch_size: 64
+
+relation_canonicalization:
+  similarity_threshold: 0.75
+  max_merge_rounds: 5
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+type_canonicalization:
+  hac_threshold: 0.75
+  relation_context_top_k: 5
+  max_merge_rounds: 5
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+hierarchy:
+  relation_signature_weighting: "ppmi"
+  weeds_containment_threshold: 0.75
+  priority_band_tolerance: 10
+  seed_roots_path: "./configs/seeds/wikidata.yaml"   # resolved by run_pipeline() at run time
+  candidate_batch_size: 30      # cap on a level's size AND the trigger threshold for regrouping it
+  max_regroup_input: 90
+  max_regroup_rounds: 3
+  label_collision_threshold: 0.90
+  max_child_claim_share: 0.6
+  max_depth: 50
+  embed_batch_size: 64
+  context_max_examples: 10      # real corpus entity examples shown per type
+  context_max_subclasses: 5     # already-placed subclasses shown per type
+  max_parallel_workers: 8
+
+entity_canonicalization:
+  similarity_threshold: 0.85
+  max_merge_rounds: 5
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+constraints:
+  hard_threshold: 0.90
+  soft_threshold: 0.50
+  hint_threshold: 0.20
+  min_support_for_hard: 3

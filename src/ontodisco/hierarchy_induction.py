@@ -601,6 +601,9 @@ def _apply_seed_roots(
     all_nodes: dict[str, _Node],
     edges: list[HierarchyEdge],
     synthetic_counter: list[int],
+    known_labels: dict[str, str],
+    known_lock: threading.Lock,
+    synthesized: list[SynthesizedType],
 ) -> set[str]:
     """Promote existing T* types matching a seed label (by normalized label)
     to pinned status, or synthesize a fresh node for seed labels with no
@@ -636,7 +639,28 @@ def _apply_seed_roots(
     unplaced leaf -- its seed edge is already authoritative.
 
     Returns the set of ROOT pinned type_ids (i.e. exactly `pool`'s pinned
-    members) -- what the priority-band loop excludes from placement."""
+    members) -- what the priority-band loop excludes from placement.
+
+    Every freshly-synthesized seed node (a seed label with no match in T*,
+    e.g. a DOLCE category like "Endurant") is also registered in
+    `known_labels`, the same registry `_check_collision` consults before
+    minting a regroup-synthesized abstraction. Without this, a seed-provided
+    category is invisible to that check -- exactly the duplicate-abstraction
+    bug `_check_collision` exists to prevent everywhere else, just with the
+    seed ontology on the losing end instead of two independent regroup
+    calls.
+
+    Every freshly-synthesized seed node is ALSO appended to `synthesized`
+    (the SAME list _regroup_level's own invented abstractions go into) --
+    without this, a seed-synthesized node's type_id ("type_seed0015") has NO
+    label recorded anywhere in HierarchyInductionResult at all (it exists
+    only on the transient, induction-internal _Node in `all_nodes`, which is
+    discarded when this function returns), so any downstream consumer
+    showing that type's name -- the webapp, a future serializer -- would
+    show the bare, meaningless id with no fallback available. `child_type_ids`
+    is left empty here (unlike a regroup synthesis, which knows its members
+    at mint time) since a seed node's real children are only discovered
+    later, via `_walk`'s own recursion and eventual ordinary placement."""
     pinned_roots: set[str] = set()
     assigned_parent: set[str] = set()
     label_to_id = {normalize_label(n.label): tid for tid, n in pool.items()}
@@ -651,6 +675,11 @@ def _apply_seed_roots(
         new_node = _Node(type_id=new_id, label=label.strip(), profile={}, is_leaf=False, definition=description.strip())
         all_nodes[new_id] = new_node
         label_to_id[norm] = new_id
+        with known_lock:
+            known_labels[norm] = new_id
+        synthesized.append(SynthesizedType(
+            type_id=new_id, canonical_label=label.strip(), definition=description.strip(), child_type_ids=[],
+        ))
         return new_id
 
     def _walk(items: list, parent_id: Optional[str]) -> None:
@@ -1230,7 +1259,8 @@ def induce_hierarchy(
 
     pinned_roots: set[str] = set()
     if config.seed_roots:
-        pinned_roots = _apply_seed_roots(config.seed_roots, pool, all_nodes, edges, synthetic_counter)
+        pinned_roots = _apply_seed_roots(
+            config.seed_roots, pool, all_nodes, edges, synthetic_counter, known_labels, known_lock, synthesized)
         num_seed_edges = sum(1 for e in edges if e.is_seed)
         logger.info(
             "Seeded with %d pinned root(s): %s (%d nested seed edge(s) below them)",

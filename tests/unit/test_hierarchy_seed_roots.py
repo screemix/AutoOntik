@@ -10,7 +10,11 @@ pipeline.
 
 from __future__ import annotations
 
-from src.ontodisco.hierarchy_induction import HierarchyEdge, _Node, _apply_seed_roots, _node_context
+import threading
+
+from src.ontodisco.hierarchy_induction import (
+    HierarchyEdge, SynthesizedType, _Node, _apply_seed_roots, _check_collision, _node_context,
+)
 
 
 def _make_pool(*labels: str) -> dict[str, _Node]:
@@ -21,12 +25,23 @@ def _make_pool(*labels: str) -> dict[str, _Node]:
     return pool
 
 
+def _seed(seed_items, pool, all_nodes, edges, counter=None, known_labels=None, synthesized=None):
+    """Thin wrapper matching _apply_seed_roots's real call signature, so
+    each test doesn't have to spell out the known_labels/known_lock/
+    synthesized plumbing it doesn't care about."""
+    return _apply_seed_roots(
+        seed_items, pool, all_nodes, edges, counter if counter is not None else [0],
+        known_labels if known_labels is not None else {}, threading.Lock(),
+        synthesized if synthesized is not None else [],
+    )
+
+
 def test_flat_seed_list_is_backward_compatible():
     pool = _make_pool("Endurant", "Perdurant")
     all_nodes = dict(pool)
     edges: list[HierarchyEdge] = []
 
-    pinned_roots = _apply_seed_roots(["Endurant", "Perdurant"], pool, all_nodes, edges, [0])
+    pinned_roots = _seed(["Endurant", "Perdurant"], pool, all_nodes, edges)
 
     assert pinned_roots == set(pool.keys())
     assert edges == []  # no nesting -> no seed edges
@@ -47,7 +62,7 @@ def test_nested_seed_creates_seed_edge_and_hides_child_from_pool():
             ],
         },
     ]
-    pinned_roots = _apply_seed_roots(seed_items, pool, all_nodes, edges, counter)
+    pinned_roots = _seed(seed_items, pool, all_nodes, edges, counter)
 
     # Only "Endurant" is a root -- it's the only one with no seed parent.
     assert len(pinned_roots) == 1
@@ -91,7 +106,7 @@ def test_seed_label_matching_existing_root_type_stays_pinned_and_in_pool():
     all_nodes = dict(pool)
     edges: list[HierarchyEdge] = []
 
-    pinned_roots = _apply_seed_roots(["Endurant"], pool, all_nodes, edges, [0])
+    pinned_roots = _seed(["Endurant"], pool, all_nodes, edges)
 
     assert len(pinned_roots) == 1
     (root_id,) = pinned_roots
@@ -110,7 +125,7 @@ def test_description_becomes_definition_for_synthesized_node_only():
         {"label": "Endurant", "description": "should be ignored -- Endurant already exists in T*"},
         {"label": "Perdurant", "description": "only partially present at any time it exists"},
     ]
-    _apply_seed_roots(seed_items, pool, all_nodes, edges, [0])
+    _seed(seed_items, pool, all_nodes, edges)
 
     endurant = next(n for n in all_nodes.values() if n.label == "Endurant")
     perdurant = next(n for n in all_nodes.values() if n.label == "Perdurant")
@@ -151,6 +166,58 @@ def test_node_context_combines_definition_with_examples_and_subclasses():
     )
 
 
+def test_synthesized_seed_label_is_visible_to_collision_detection():
+    """Regression test: a seed label with no match in T* (e.g. DOLCE's
+    'Endurant', which won't appear verbatim in a corpus) must be registered
+    in known_labels -- the same registry _check_collision consults before
+    _regroup_level mints a new abstraction. Before this fix, seed-synthesized
+    labels were invisible to that check, so later placement could mint a
+    second, duplicate node for the same concept instead of reusing the
+    seed-provided one."""
+    pool: dict[str, _Node] = {}
+    all_nodes: dict[str, _Node] = {}
+    edges: list[HierarchyEdge] = []
+    known_labels: dict[str, str] = {}
+
+    pinned_roots = _seed(["Endurant"], pool, all_nodes, edges, known_labels=known_labels)
+    (endurant_id,) = pinned_roots
+
+    assert "endurant" in known_labels
+    assert known_labels["endurant"] == endurant_id
+
+    # _check_collision must find it via the free exact-match path (no
+    # embedder call needed) and report it as the type to reuse.
+    reused_id = _check_collision(
+        "Endurant", known_labels, threading.Lock(),
+        embedding_by_id={}, embedder=None, threshold=0.9,
+    )
+    assert reused_id == endurant_id
+
+
+def test_synthesized_seed_labels_are_recorded_in_synthesized_types():
+    """Regression test: a seed-synthesized node's LABEL has to survive past
+    _apply_seed_roots returning, or nothing downstream (HierarchyInductionResult,
+    the webapp, a future serializer) can ever show it -- the internal _Node
+    it's minted on is discarded once induction finishes. Before this fix,
+    only _regroup_level's own invented abstractions were recorded in
+    `synthesized`; a seed-synthesized type_id like "type_seed0015" had its
+    label nowhere, so any consumer fell back to showing the bare id."""
+    pool: dict[str, _Node] = {}
+    all_nodes: dict[str, _Node] = {}
+    edges: list[HierarchyEdge] = []
+    synthesized: list[SynthesizedType] = []
+
+    seed_items = [{"label": "Endurant", "description": "wholly present at any time it exists"}]
+    pinned_roots = _seed(seed_items, pool, all_nodes, edges, synthesized=synthesized)
+    (endurant_id,) = pinned_roots
+
+    assert len(synthesized) == 1
+    entry = synthesized[0]
+    assert entry.type_id == endurant_id
+    assert entry.canonical_label == "Endurant"
+    assert entry.definition == "wholly present at any time it exists"
+
+
 def test_duplicate_nested_label_under_two_parents_keeps_first_and_warns(caplog):
     pool: dict[str, _Node] = {}
     all_nodes: dict[str, _Node] = {}
@@ -160,7 +227,7 @@ def test_duplicate_nested_label_under_two_parents_keeps_first_and_warns(caplog):
         {"label": "Endurant", "children": ["Concept"]},
         {"label": "Perdurant", "children": ["Concept"]},
     ]
-    _apply_seed_roots(seed_items, pool, all_nodes, edges, [0])
+    _seed(seed_items, pool, all_nodes, edges)
 
     concept_edges = [e for e in edges if all_nodes[e.child_type_id].label == "Concept"]
     assert len(concept_edges) == 1  # second occurrence ignored, not a second edge

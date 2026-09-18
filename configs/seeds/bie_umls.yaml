@@ -1,0 +1,139 @@
+# configs/seeds/bie_umls.yaml
+#
+# Biomedical seed root categories for hierarchy induction over the BIE
+# corpus, for use as an external `hierarchy.seed_roots_path` -- see e.g.
+# configs/bie_gptoss_umls_seeded.yaml. Loaded by pipeline.load_seed_roots()
+# into hierarchy_induction.HierarchyConfig.seed_roots at run time.
+#
+# All 18 entries are FLAT roots (no nesting) -- the user supplied a flat
+# list of categories, not a tree, so each is pinned as a top-level candidate
+# no other node can displace from root status; real corpus types attach
+# under whichever one fits via the ordinary LLM-adjudicated placement, same
+# as any other node.
+#
+# The labels are drawn from (a subset, or close paraphrases of) the UMLS
+# Semantic Network's semantic types -- the standard type inventory behind
+# most biomedical NLP/IE benchmarks (MetaMap, SemMedDB, BIE included). Every
+# entry carries a `description` -- WITHOUT one, a freshly synthesized seed
+# node starts with an empty relation-signature profile and reaches the LLM
+# as a bare label with no context at all (_node_context /
+# CLAUDE.md §15.4, §16.2.1). This was measured directly on this project's
+# own DOLCE-seeded run (mine_gptoss_dolce, no descriptions): seed categories
+# ended up scattered through the induced tree rather than placed under their
+# intended parents. Descriptions below are condensed paraphrases of the
+# UMLS Semantic Network's own definitions (Bodenreider & McCray, "Exploring
+# Semantic Groups Through Visual Approaches", J Biomed Inform 2003; NLM's
+# Semantic Network documentation), not verbatim quotations.
+
+seed_roots:
+  - label: Chemical or Drug
+    description: >-
+      A chemical substance, whether occurring naturally or synthesized, and
+      substances used in the diagnosis, treatment, or prevention of disease,
+      or that otherwise affect the structure or function of the body.
+      Examples: aspirin, insulin, glucose, a monoclonal antibody, a chemical
+      compound used in a laboratory assay.
+  - label: Disease or Syndrome
+    description: >-
+      A condition that alters or interferes with a normal process, state,
+      or activity of an organism, usually characterized by abnormal
+      functioning of one or more of the host's systems, parts, or organs,
+      including a complex of symptoms descriptive of a disorder. Examples:
+      diabetes mellitus, colorectal carcinoma, Down syndrome, pneumonia.
+  - label: Therapeutic or Preventive Procedure
+    description: >-
+      A procedure, method, or technique designed to prevent a disease or
+      disorder, improve physical function, or treat a disease or injury.
+      Examples: chemotherapy, vaccination, physical therapy, a surgical
+      resection.
+  - label: Anatomy
+    description: >-
+      A physical part or structural component of an organism's body, at any
+      scale from whole organ systems down to cells and their components.
+      Examples: the liver, a neuron, the cell membrane, the femur, a blood
+      vessel.
+  - label: Medical Device
+    description: >-
+      A manufactured object used primarily in the diagnosis, treatment, or
+      prevention of a physiologic or anatomic disorder in a clinical
+      setting. Examples: a pacemaker, a stent, a surgical scalpel, an
+      MRI scanner.
+  - label: Sign, Symptom or Finding
+    description: >-
+      An observable manifestation of a disease or condition -- either
+      objectively noted by a clinician (a sign) or subjectively reported by
+      a patient (a symptom) -- or, more broadly, anything discovered by
+      direct observation or measurement of an organism's state, including
+      lab and imaging findings. Examples: fever, chest pain, an elevated
+      white blood cell count, a mass seen on X-ray.
+  - label: Microorganism
+    description: >-
+      A microscopic organism, typically unicellular or simple in structure,
+      including bacteria, viruses, fungi, and protozoa. Examples:
+      Escherichia coli, influenza virus, Candida albicans, Plasmodium
+      falciparum.
+  - label: Neoplastic Process
+    description: >-
+      A new and abnormal growth of tissue in which the growth is
+      uncontrolled and progressive, encompassing both benign and malignant
+      tumors and the process of their formation. Examples: a benign
+      adenoma, metastatic breast cancer, tumor angiogenesis.
+  - label: Diagnostic Procedure
+    description: >-
+      A procedure, method, or technique used to determine the nature or
+      identity of a disease or disorder in a patient, excluding procedures
+      carried out on specimens in a laboratory. Examples: a physical
+      examination, an MRI scan, a biopsy (as the clinical act), an
+      electrocardiogram.
+  - label: Laboratory Procedure
+    description: >-
+      A procedure, method, or technique used to determine the composition,
+      quantity, or concentration of a specimen, carried out in a clinical
+      or research laboratory. Examples: a blood glucose assay, PCR
+      amplification, Western blotting, flow cytometry.
+  - label: Physiology
+    description: >-
+      A normal process, activity, function, or state of an organism or one
+      of its systems, organs, or cells, as opposed to disease or
+      dysfunction. Examples: respiration, blood clotting, gene expression,
+      cell division, homeostasis.
+  - label: Eukaryote
+    description: >-
+      An organism whose cells contain a membrane-bound nucleus and other
+      membrane-bound organelles, as opposed to a prokaryote (bacteria and
+      archaea). Examples: humans, mice, yeast, plants, protozoa.
+  - label: Pathology
+    description: >-
+      A disordered process, activity, or state of an organism, organ
+      system, or tissue that is less specific than a named disease --
+      including abnormal responses, dysfunctions, and disease mechanisms
+      considered independently of any single diagnosis. Examples:
+      inflammation, fibrosis, apoptosis dysregulation, tissue necrosis.
+  - label: Anatomical Abnormality
+    description: >-
+      A structurally abnormal body part, or one abnormal in size, shape, or
+      location, whether present from birth or acquired later. Examples: a
+      cleft palate, an aneurysm, a malformed heart valve, a fused vertebra.
+  - label: Mental or Behavioral Dysfunction
+    description: >-
+      A clinically significant dysfunction whose primary manifestation is
+      behavioral or psychological, with or without an accompanying
+      disturbance of physiological function or structure. Examples:
+      depression, schizophrenia, substance use disorder, anxiety disorder.
+  - label: Injury or Poisoning
+    description: >-
+      A traumatic wound, physical injury, or toxic/poisoning effect caused
+      by an external physical, chemical, or biological agent or force.
+      Examples: a bone fracture, a burn, drug overdose, snake envenomation.
+  - label: Research Activity or Technique
+    description: >-
+      An activity, method, or technique carried out as part of scientific
+      research or experimentation, as opposed to direct clinical care.
+      Examples: a clinical trial, gene knockout, a statistical analysis
+      method, a sequencing protocol.
+  - label: Research Device
+    description: >-
+      A manufactured object used primarily in carrying out scientific
+      research or experimentation, as opposed to direct patient diagnosis
+      or treatment. Examples: a mass spectrometer, a lab centrifuge, a
+      microarray chip, a research-grade microscope.

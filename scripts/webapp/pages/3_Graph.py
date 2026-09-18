@@ -1,6 +1,8 @@
-"""Entity graph viewer: search by name/type, then render a bounded k-hop
-neighborhood. The full KG is too large to render at once, so nothing is
-drawn until the user picks a seed and a hop radius."""
+"""Entity graph viewer: click one or more types in the induced hierarchy
+tree, and render the induced subgraph over every entity under any of them
+(no separate hop-radius search -- type selection is the scoping mechanism).
+The full KG is too large to render at once, so nothing is drawn until at
+least one type is selected."""
 import sys
 from pathlib import Path
 
@@ -9,8 +11,10 @@ import streamlit.components.v1 as components
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from scripts.webapp.lib.data import require_run_bundle, load_triplets_cached  # noqa: E402
-from scripts.webapp.lib.graph import build_graph, search_entities, neighborhood  # noqa: E402
+from scripts.webapp.lib.data import require_run_bundle, load_triplets_cached, type_label_lookup  # noqa: E402
+from scripts.webapp.lib.graph import build_graph, color_group_for, type_selection_subgraph  # noqa: E402
+from scripts.webapp.components.type_tree_selector import type_tree_selector  # noqa: E402
+from scripts.webapp.lib.sandbox import subtree_ids  # noqa: E402
 
 st.set_page_config(page_title="Graph - AutoOntic", layout="wide")
 st.title("Entity Graph")
@@ -20,6 +24,9 @@ bundle = require_run_bundle()
 if bundle.entity_vocab is None or bundle.type_vocab is None or bundle.relation_vocab is None:
     st.error("This run is missing entity_dedup.pkl / type_dedup.pkl / relation_dedup.pkl -- "
              "all three are needed to resolve the graph.")
+    st.stop()
+if bundle.hierarchy_result is None:
+    st.error("This run is missing hierarchy_induction.pkl -- needed to render the type tree.")
     st.stop()
 triplets_path = bundle.triplets_path
 if triplets_path is None:
@@ -49,74 +56,83 @@ col2.metric("Edges", index.graph.number_of_edges())
 col3.metric("Resolved triplets", f"{index.num_resolved}/{index.num_triplets_seen}")
 
 st.divider()
-st.subheader("Find a starting entity")
+st.subheader("Select types")
+st.caption("Click a type node to include every entity under it. Selecting a parent "
+           "colors its whole subtree as one group -- pick a more specific node for a "
+           "finer-grained legend.")
 
-c1, c2 = st.columns([2, 1])
-name_query = c1.text_input("Name contains", "")
-type_options = ["(any type)"] + sorted(index.types_by_label.keys())
-type_choice = c2.selectbox("Type", options=type_options)
-type_filter = None if type_choice == "(any type)" else type_choice
+hierarchy = bundle.hierarchy_result.hierarchy
+label_lookup = type_label_lookup(bundle)
+tree_nodes = [{"id": tid, "label": label} for tid, label in label_lookup.items()]
+tree_edges = [{"child": e.child_type_id, "parent": e.parent_type_id} for e in hierarchy.edges]
 
-if not name_query and type_filter is None:
-    st.info("Type a name substring and/or pick a type to search.")
+selected_type_ids = type_tree_selector(tree_nodes, tree_edges, height=560, key="graph_type_tree")
+
+if not selected_type_ids:
+    st.info("Select one or more types above to render their entities.")
     st.stop()
-
-matches = search_entities(index, name_query, type_filter, limit=300)
-if not matches:
-    st.warning("No entities match.")
-    st.stop()
-
-match_labels = [f"{m['label']}  [{m['type']}]" for m in matches]
-picked = st.multiselect(
-    f"{len(matches)} match(es) -- pick one or more as the neighborhood's seed(s)",
-    options=range(len(matches)), format_func=lambda i: match_labels[i],
-)
-if not picked:
-    st.stop()
-seed_ids = [matches[i]["id"] for i in picked]
 
 st.divider()
-st.subheader("Neighborhood")
-c1, c2 = st.columns(2)
-k = c1.slider("Hops (k)", 0, 4, 1)
-max_nodes = c2.slider("Max nodes to render", 20, 400, 150, 10,
-                       help="The graph can be too large to usefully view -- this caps it. "
-                            "If the true neighborhood is bigger, it's truncated and flagged below.")
+st.subheader("Graph")
+max_nodes = st.slider("Max nodes to render", 20, 400, 150, 10,
+                       help="Selected-type entities plus everything directly connected to them "
+                            "can be too large to usefully view -- this caps it. If the true set "
+                            "is bigger, it's truncated and flagged below.")
 
-sub, truncated = neighborhood(index, seed_ids, k, max_nodes)
+included_type_ids = set()
+for tid in selected_type_ids:
+    included_type_ids |= subtree_ids(hierarchy, tid)
+
+selected_ids_set = set(selected_type_ids)
+# Directly-connected neighbors of ANY type are pulled in too, not just
+# entities whose own type was selected -- a pure induced subgraph over only
+# the selected types showed almost no edges, since most relations connect
+# DIFFERENT types (e.g. "directed" links a person to a film) -- see
+# type_selection_subgraph's own docstring for the measurement that drove this.
+sub, truncated = type_selection_subgraph(index, included_type_ids, max_nodes)
 if truncated:
     st.warning(
-        f"The full {k}-hop neighborhood exceeds {max_nodes} nodes -- showing a truncated subset. "
-        "Reduce k, lower the node cap's target, or narrow the seed selection for a complete view."
+        f"The selected types (plus their directly-connected entities) exceed {max_nodes} "
+        "nodes -- showing a truncated subset. Raise the node cap or narrow the type "
+        "selection for a complete view."
     )
 st.caption(f"Showing {sub.number_of_nodes()} node(s), {sub.number_of_edges()} edge(s)")
 
 if sub.number_of_nodes() == 0:
-    st.info("Empty neighborhood.")
+    st.info("No entities resolve to the selected type(s) in this run's triplets.")
     st.stop()
 
 from pyvis.network import Network  # noqa: E402
 
+NEUTRAL_COLOR = "#B0B0B0"   # reserved for "connected, but not itself a selected type" -- never
+                            # handed out to a real selected group, so it can't collide with one
 TYPE_PALETTE = [
     "#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B2",
-    "#937860", "#DA8BC3", "#8C8C8C", "#CCB974", "#64B5CD",
+    "#937860", "#DA8BC3", "#CCB974", "#64B5CD", "#8C6D31",
 ]
-type_color = {}
-for t in sorted({d.get("type_label", "?") for _, d in sub.nodes(data=True)}):
-    type_color[t] = TYPE_PALETTE[len(type_color) % len(TYPE_PALETTE)]
+color_groups = {}
+has_neighbor_nodes = False
+for _, d in sub.nodes(data=True):
+    group = color_group_for(d.get("type_id"), hierarchy, selected_ids_set)
+    if group is not None and group not in color_groups:
+        color_groups[group] = TYPE_PALETTE[len(color_groups) % len(TYPE_PALETTE)]
+    elif group is None:
+        has_neighbor_nodes = True
 
 net = Network(height="750px", width="100%", directed=True, bgcolor="#ffffff", font_color="#222222")
 net.barnes_hut(gravity=-8000, spring_length=120)
 for node_id, data in sub.nodes(data=True):
+    group = color_group_for(data.get("type_id"), hierarchy, selected_ids_set)
+    is_core = data.get("type_id") in included_type_ids
+    color = color_groups.get(group, NEUTRAL_COLOR)
     t = data.get("type_label", "?")
-    is_seed = node_id in seed_ids
     net.add_node(
         node_id,
         label=data.get("label", node_id),
         title=f"{data.get('label')}  [{t}]",
-        color=type_color[t],
-        size=26 if is_seed else 16,
-        borderWidth=3 if is_seed else 1,
+        color=color,
+        size=24 if is_core else 14,
+        borderWidth=3 if is_core else 1,
     )
 for u, v, data in sub.edges(data=True):
     net.add_edge(u, v, label=data.get("label", ""), title=data.get("label", ""))
@@ -131,6 +147,13 @@ net.set_options("""
 html = net.generate_html(notebook=False)
 components.html(html, height=780, scrolling=True)
 
-with st.expander("Legend"):
-    for t, color in type_color.items():
-        st.markdown(f"<span style='color:{color}'>&#9679;</span> {t}", unsafe_allow_html=True)
+st.markdown("**Legend**")
+st.caption("Larger, bordered nodes are entities of a selected type; small plain nodes are "
+           "directly-connected entities of other types, shown for context.")
+legend_html = " &nbsp;&nbsp; ".join(
+    f"<span style='color:{color}'>&#9679;</span> {label_lookup.get(group, group)}"
+    for group, color in color_groups.items()
+)
+if has_neighbor_nodes:
+    legend_html += f" &nbsp;&nbsp; <span style='color:{NEUTRAL_COLOR}'>&#9679;</span> (connected, not a selected type)"
+st.markdown(legend_html, unsafe_allow_html=True)

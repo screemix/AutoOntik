@@ -14,71 +14,282 @@
 # LLM-adjudicated placement, same as any other node.
 #
 # Each label is matched against T* by normalized label if a corpus type of
-# that name already exists, or synthesized fresh (no relation-signature
-# profile) otherwise -- most of DOLCE's finer categories (e.g. "Amount of
-# Matter", "Non-Agentive Social Object") are expected to be synthesized,
-# since they're unlikely to appear verbatim as raw extracted types in most
-# corpora; they still function as valid attachment points.
+# that name already exists, or synthesized fresh otherwise -- most of
+# DOLCE's finer categories (e.g. "Amount of Matter", "Non-Agentive Social
+# Object") are expected to be synthesized, since they're unlikely to appear
+# verbatim as raw extracted types in most corpora; they still function as
+# valid attachment points.
+#
+# Every entry below carries a `description` -- WITHOUT one, a freshly
+# synthesized seed node starts with an empty relation-signature profile, so
+# it reaches the LLM as a bare label with no context at all (_node_context /
+# CLAUDE.md §15.4, §16.2.1). Measured directly on a real run
+# (mine_gptoss_dolce, no descriptions): DOLCE categories ended up scattered
+# through the induced tree rather than placed under their intended parents
+# -- unsurprising given labels like "Perdurant" or "Non-Agentive Social
+# Object" aren't self-explanatory to an LLM without a real definition, and
+# corpus types being compared against them had nothing but that bare label
+# to judge subsumption against either. Descriptions are condensed from
+# DOLCE's own definitions (Borgo et al. 2023, arXiv:2308.01597 -- already
+# cited in CLAUDE.md §15.4; Masolo et al. 2003, WonderWeb Deliverable D18).
 
 seed_roots:
   - label: Endurant
+    description: >-
+      An entity that is wholly present at any time it exists (not just
+      partially, through temporal parts) and persists through time while
+      maintaining its identity, even as it undergoes qualitative change.
+      Also called a continuant. Examples: a person, a table, an amount of
+      gold, a hole in a wall.
     children:
       - label: Physical Endurant
+        description: >-
+          An endurant with mass, extended in physical space. Examples: a
+          person, a car, an amount of water, a mountain.
         children:
           - label: Amount of Matter
+            description: >-
+              A physical endurant with no unity or identity conditions of
+              its own -- it has parts but no natural boundary distinguishing
+              it as "one thing" (unlike an object). Examples: a mass of
+              sand, a piece of gold, the water in a lake, air.
           - label: Feature
+            description: >-
+              A physical endurant that depends on another physical object as
+              its host and cannot exist or be conceived independently of
+              it. Examples: a bump on a surface, a hole in a wall, an edge,
+              a boundary.
           - label: Physical Object
+            description: >-
+              A physical endurant with unity -- a self-connected whole with
+              its own identity conditions, distinguishable as "one thing"
+              from its surroundings. Examples: a person, a car, a stone, an
+              apple.
             children:
               - label: Agentive Physical Object
+                description: >-
+                  A physical object with intentional or cognitive capacities
+                  -- it can perceive, believe, or act with purpose.
+                  Examples: a person, an animal.
               - label: Non-Agentive Physical Object
+                description: >-
+                  A physical object without intentionality or cognitive
+                  capacities. Examples: a stone, a table, a river, a
+                  mountain.
                 children:
                   - label: Artefact
+                    description: >-
+                      A non-agentive physical object intentionally created
+                      or shaped by an agent for a purpose. Examples: a
+                      chair, a hammer, a building, a book (as a physical
+                      copy).
       - label: Non-Physical Endurant
+        description: >-
+          An endurant without mass, not extended in physical space.
+          Examples: a person's belief, a legal norm, a social role, a
+          concept, a nation (as a social entity).
         children:
           - label: Non-Physical Object
+            description: >-
+              A non-physical endurant with unity -- a self-contained
+              non-physical entity with its own identity conditions.
+              Examples: a belief, a social role, a mental state, an
+              institution.
             children:
               - label: Mental Object
+                description: >-
+                  A non-physical object that exists only within a cognitive
+                  agent's mind and depends on that agent for its existence.
+                  Examples: a private thought, an imagined scene, a belief
+                  held by one person, a memory.
               - label: Social Object
+                description: >-
+                  A non-physical object that exists by virtue of social
+                  convention or agreement and is recognized by a community
+                  of agents, rather than depending on any single mind.
+                  Examples: money, a law, a language, an institution, a
+                  contract.
                 children:
                   - label: Agentive Social Object
+                    description: >-
+                      A social object endowed with agentive power -- it can
+                      act, hold obligations, or be a party to social
+                      relationships. Examples: a company, an institution
+                      empowered to act, a government body.
                     children:
                       - label: Social Agent
+                        description: >-
+                          The socially-constituted aspect of an agent that
+                          plays social roles and holds social relationships
+                          and obligations, distinct from its physical body.
+                          Examples: a person acting as a citizen or
+                          employee, a corporation treated as a legal person.
                       - label: Society
+                        description: >-
+                          An agentive social object constituted by, and made
+                          up of, a persistent, recognized collective of
+                          social agents. Examples: a nation, a club, a
+                          professional association, a community.
                   - label: Non-Agentive Social Object
+                    description: >-
+                      A social object without independent agentive power --
+                      it cannot itself act, but structures or classifies
+                      what agents do. Examples: a norm, a contract (as a
+                      document), a price, money as a medium of exchange.
                     children:
                       - label: Concept
+                        description: >-
+                          A non-agentive social object used to classify or
+                          categorize other entities, defined and sanctioned
+                          by social convention. Examples: the concept
+                          "professor," the concept "customer," a legal
+                          category, a biological taxon as socially defined.
                         children:
                           - label: Role
+                            description: >-
+                              A concept that classifies an entity as playing
+                              a particular part within some context,
+                              dependent on both its bearer and that context
+                              -- the same entity can hold different roles in
+                              different situations. Examples: "president,"
+                              "husband," "customer," "employee" (as held by
+                              a specific person).
       - label: Arbitrary Sums
+        description: >-
+          An endurant formed as a purely formal mereological sum of other
+          endurants, with no natural unity or identity condition binding the
+          parts together (unlike a Physical Object). Examples: the sum of
+          "my left shoe and the Eiffel Tower," an arbitrary collection of
+          unrelated things treated as one for a purely logical purpose.
   - label: Perdurant
+    description: >-
+      An entity that happens or unfolds in time and is never wholly present
+      at any single instant -- only its temporal parts are present at any
+      given moment. Also called an occurrent. Examples: a race, a
+      conversation, a war, a process of erosion, a meeting.
     children:
       - label: Event
+        description: >-
+          A perdurant with a natural culmination or completion point built
+          into its own nature (a telic perdurant). Examples: a birthday
+          party, a race, the signing of a contract, a football match.
         children:
           - label: Accomplishment
+            description: >-
+              An event whose ending is determined by reaching an inherent
+              goal or outcome, and which has internal structure/duration
+              leading up to it. Examples: "building a house," "writing a
+              book," "running a marathon" (ends on completion).
           - label: Achievement
+            description: >-
+              An event that occurs instantaneously or near-instantaneously,
+              marking a punctual transition with no significant internal
+              duration. Examples: "reaching the summit," "winning the race,"
+              "the light turning green."
       - label: Stative
+        description: >-
+          A perdurant without a natural culmination point -- it can be
+          arbitrarily divided in time and every part is still an instance of
+          the same kind (an atelic perdurant). Examples: "sitting," "being
+          ill," "raining," "working."
         children:
           - label: State
+            description: >-
+              A stative that is homogeneous and holds without inherent
+              internal change -- a static condition rather than an ongoing
+              activity. Examples: "being tall," "sitting still," "loving
+              someone," "owning a house."
           - label: Process
+            description: >-
+              A stative involving ongoing internal change or activity, but
+              with no definite completion point of its own. Examples:
+              "raining," "running" (as an ongoing activity, not the race
+              itself), "aging," "eroding."
   - label: Quality
+    description: >-
+      A particular that inheres directly in (is a basic aspect of) an
+      endurant or a perdurant -- the "hook" by which an entity can be
+      perceived, measured, or compared along some dimension. Every quality
+      belongs to exactly one entity. Examples: the color of an apple, the
+      weight of a stone, the duration of a meeting, the shape of a table.
     children:
       - label: Temporal Quality
+        description: >-
+          A quality that inheres in a perdurant and concerns its position or
+          extent in time. Examples: the duration of a meeting, the starting
+          time of a race, the frequency of a recurring event.
         children:
           - label: Temporal Location
+            description: >-
+              A temporal quality expressing WHEN something occurs -- its
+              position on the timeline. Examples: "occurring in 1990,"
+              "starting at 3pm," "happening last Tuesday."
       - label: Physical Quality
+        description: >-
+          A quality that inheres in a physical endurant. Examples: the color
+          of a car, the weight of a stone, the shape of a table, the
+          temperature of water.
         children:
           - label: Spatial Location
+            description: >-
+              A physical quality expressing an object's position in space.
+              Examples: "being in Rome," "located on the table," "5 meters
+              north of the door."
       - label: Abstract Quality
+        description: >-
+          A quality that inheres in an abstract entity rather than a
+          physical or temporal one. Examples: the value of a number, the
+          truth-value of a proposition, the cardinality of a set.
   - label: Abstract
+    description: >-
+      A particular with no spatial or temporal qualities, and which is not
+      itself a quality. Examples: a set, a fact, a number, a region (a
+      value-space used to measure qualities), a proposition.
     children:
       - label: Set
+        description: >-
+          A mathematical/abstract collection of entities, defined by
+          membership rather than physical or mereological composition.
+          Examples: "the set of prime numbers," "the set of students
+          enrolled this year."
       - label: Fact
+        description: >-
+          An abstract entity representing a state of affairs or proposition
+          taken to hold true. Examples: "the fact that Rome is the capital
+          of Italy," "the fact that water boils at 100°C at sea level."
       - label: Region
+        description: >-
+          An abstract entity used as the value-space or parameter-space
+          that a quality is "located" in when it is measured or compared to
+          another quality of the same kind. Examples: a point in a color
+          space, a position on a timeline, a weight value on a scale.
         children:
           - label: Temporal Region
+            description: >-
+              A region within the space of possible temporal locations --
+              what a temporal quality's value is drawn from. Examples: "the
+              year 1990," "the interval from 3pm to 5pm."
             children:
               - label: Time Interval
+                description: >-
+                  A temporal region with a definite span or duration, rather
+                  than a single instant. Examples: "the 20th century," "a
+                  two-hour period," "the summer of 1969."
           - label: Physical Region
+            description: >-
+              A region within the space of possible physical-quality values
+              (not necessarily spatial -- also weight-value spaces,
+              color-value spaces, etc.). Examples: a range on a weight
+              scale, a region in a color space.
             children:
               - label: Space Region
+                description: >-
+                  A physical region specifically within the space of
+                  possible spatial locations. Examples: "the region inside
+                  a building," "a point in 3D space," "the area north of
+                  the river."
           - label: Abstract Region
+            description: >-
+              A region within the space of possible abstract-quality values.
+              Examples: the space of truth-values (true/false), a range of
+              set cardinalities, a scale of numeric values.

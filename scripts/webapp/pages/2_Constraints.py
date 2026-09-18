@@ -7,7 +7,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from scripts.webapp.lib.data import require_run_bundle  # noqa: E402
+from scripts.webapp.lib.data import require_run_bundle, type_label_lookup  # noqa: E402
 
 st.set_page_config(page_title="Constraints - AutoOntic", layout="wide")
 st.title("Domain/Range Constraints")
@@ -18,9 +18,13 @@ if not bundle.constraints:
     st.error("This run has no constraints.pkl checkpoint (or it's empty).")
     st.stop()
 
-rv, tv = bundle.relation_vocab, bundle.type_vocab
+rv = bundle.relation_vocab
+# A domain/range type is frequently a SYNTHESIZED type (hierarchy induction's
+# own invented abstraction, e.g. "type_h0044") rather than a real T* member --
+# type_label_lookup merges both sources (see its own docstring).
+label_lookup = type_label_lookup(bundle)
 relation_label = lambda rid: rv.items[rid].canonical_label if rid in rv.items else rid
-type_label = lambda tid: tv.items[tid].canonical_label if tid in tv.items else tid
+type_label = lambda tid: label_lookup.get(tid, tid)
 
 rows = [
     {

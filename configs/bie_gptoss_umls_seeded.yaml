@@ -1,0 +1,75 @@
+# configs/bie_gptoss_umls_seeded.yaml
+#
+# Same corpus and LLM/dedup/hierarchy settings as the unseeded BIE pilot run
+# (output/bie/checkpoints/run_1 -- 797 triplets from data/bie/triplets_pilot.jsonl,
+# Openai/Gpt-oss-120b via the AIRI gateway), but hierarchy induction is
+# seeded with 18 biomedical top-level categories (configs/seeds/bie_umls.yaml,
+# drawn from the UMLS Semantic Network -- Chemical or Drug, Disease or
+# Syndrome, Therapeutic or Preventive Procedure, Anatomy, Medical Device,
+# Sign/Symptom or Finding, Microorganism, Neoplastic Process, Diagnostic
+# Procedure, Laboratory Procedure, Physiology, Eukaryote, Pathology,
+# Anatomical Abnormality, Mental or Behavioral Dysfunction, Injury or
+# Poisoning, Research Activity or Technique, Research Device) instead of
+# running unseeded. All 18 are flat roots, pinned as top-level candidates;
+# real corpus types attach under whichever fits via the ordinary
+# LLM-adjudicated placement, same as any other node.
+#
+# Reuses the already-extracted BIE pilot triplets -- no re-extraction needed.
+
+corpus_id: "bie_umls_seeded"
+input_path: "./data/bie/triplets_pilot.jsonl"
+output_dir: "./output/bie"
+language: "en"
+include_qualifiers: true
+
+llm:
+  model: "Openai/Gpt-oss-120b"
+  api_key_env: "AIRI_KEY"
+  base_url: "https://inference.airi.net:46783/v1"
+  proxy_key_env: "PROXY_URL"
+
+embedding:
+  contriever_model: "facebook/contriever"
+  device: null
+  embed_batch_size: 64
+
+relation_canonicalization:
+  similarity_threshold: 0.75
+  max_merge_rounds: 5
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+type_canonicalization:
+  hac_threshold: 0.75
+  relation_context_top_k: 5
+  max_merge_rounds: 5
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+hierarchy:
+  relation_signature_weighting: "ppmi"
+  weeds_containment_threshold: 0.75
+  priority_band_tolerance: 10
+  seed_roots_path: "./configs/seeds/bie_umls.yaml"   # resolved by run_pipeline() at run time
+  candidate_batch_size: 30      # cap on a level's size AND the trigger threshold for regrouping it
+  max_regroup_input: 90
+  max_regroup_rounds: 3
+  label_collision_threshold: 0.90
+  max_child_claim_share: 0.6
+  max_depth: 50
+  embed_batch_size: 64
+  context_max_examples: 10      # real corpus entity examples shown per type
+  context_max_subclasses: 5     # already-placed subclasses shown per type
+  max_parallel_workers: 8
+
+entity_canonicalization:
+  similarity_threshold: 0.85
+  max_merge_rounds: 5
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+constraints:
+  hard_threshold: 0.90
+  soft_threshold: 0.50
+  hint_threshold: 0.20
+  min_support_for_hard: 3

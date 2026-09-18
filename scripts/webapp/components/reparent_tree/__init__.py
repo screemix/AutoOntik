@@ -24,13 +24,18 @@ def reparent_tree(
     edges: list[dict],
     highlight_ids: Optional[list[str]] = None,
     height: int = 600,
+    can_undo: bool = False,
     key: Optional[str] = None,
 ) -> Optional[dict]:
-    """Renders a draggable tree. `nodes`: [{"id", "label", "depth"}, ...].
-    `edges`: [{"child", "parent"}, ...]. Returns {"moved": id, "new_parent": id}
-    on a completed drop (until the next distinct drop, per Streamlit's normal
-    component-value semantics), else None."""
+    """Renders a draggable tree, with Undo/Reset buttons floating over its
+    top-right corner (`can_undo` also disables them client-side, mirroring
+    whatever gate the caller applies to its own Undo/Reset logic). `nodes`:
+    [{"id", "label", "depth"}, ...]. `edges`: [{"child", "parent"}, ...].
+    Returns one of, until the next distinct action (per Streamlit's normal
+    component-value semantics), else None:
+      {"moved": id, "new_parent": id}  -- a completed reparent
+      {"action": "undo"} / {"action": "reset"}"""
     return _component(
         nodes=nodes, edges=edges, highlight_ids=highlight_ids or [],
-        height=height, key=key, default=None,
+        height=height, can_undo=can_undo, key=key, default=None,
     )
