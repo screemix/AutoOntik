@@ -1,0 +1,86 @@
+# configs/default_ru.yaml
+#
+# Same as configs/default.yaml, for a Russian-language corpus. Contriever
+# (facebook/contriever) has no meaningful Russian coverage, so every step
+# that embeds surface forms -- relation/type/entity canonicalization and
+# hierarchy induction -- switches to ai-forever/FRIDA, a T5-encoder model
+# with native Russian support. This is the only change from default.yaml:
+# ContrieverEmbedder (src/ontodisco/utils/dedup_base.py) picks its pooling
+# method and "paraphrase: " prefix automatically from this model name, so
+# no other config or code changes are needed. The LLM extraction/verification
+# prompts themselves are not localized -- point `llm.model` at a model that
+# reads/writes Russian well; the prompts are language-agnostic instructions.
+
+corpus_id: "my_corpus_ru"
+input_path: "./data/musique_initial_triplets.jsonl"   # JSONL file, one raw triplet dict per line
+output_dir: "./output"
+
+# ── LLM client ────────────────────────────────────────────────────────────────
+llm:
+  model: "Sber/GigaChat3.5-432B-A28B"
+  api_key_env: "AIRI_KEY"       # name of the env var holding the key -- never put the key itself here
+  base_url: "https://inference.airi.net:46783/v1"
+  proxy_key_env: null            # optional: name of the env var holding an HTTP(S) proxy URL, used for
+                                  # every LLM call this pipeline makes (extraction + all 5 steps); null
+                                  # (default) means no proxy -- a direct connection to base_url
+
+# ── Embedding client ──────────────────────────────────────────────────────────
+embedding:
+  contriever_model: "ai-forever/FRIDA"   # Russian-capable; see the module note above
+  device: null                        # "cuda" | "cpu" | null (auto)
+  embed_batch_size: 32                # FRIDA is larger than Contriever -- lower the batch if this OOMs
+
+# ── Relation Canonicalization ─────────────────────────────────────────────────
+# Candidate clustering is HDBSCAN (dedup_base.cluster_hdbscan) over the full
+# pairwise cosine-distance matrix -- similarity_threshold sets HDBSCAN's
+# cluster_selection_epsilon. max_merge_rounds: embed->cluster->LLM-verify
+# passes (dedup_base.deduplicate_with_rounds), stopping early once a round
+# produces no further reduction in the canonical relation count.
+relation_canonicalization:
+  similarity_threshold: 0.75
+  max_merge_rounds: 20
+  max_parallel_workers: 8      # thread pool size for concurrent LLM cluster verification
+  max_cluster_size: 40         # clusters over this size are split into sub-batches + stitched back
+                                # together, instead of one oversized (slow, truncation-prone) LLM call
+
+# ── Type Canonicalization ─────────────────────────────────────────────────────
+type_canonicalization:
+  hac_threshold: 0.75          # HDBSCAN cluster_selection_epsilon = 1 - this (name kept for compatibility)
+  relation_context_top_k: 5
+  max_merge_rounds: 20          # same convergence loop as relation_canonicalization above
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+# ── Hierarchy Induction ───────────────────────────────────────────────────────
+hierarchy:
+  relation_signature_weighting: "ppmi"
+  weeds_containment_threshold: 0.75
+  priority_band_tolerance: 10  # nodes within this many in-degree units of a band's top score share it
+  seed_roots: []              # e.g. ["Endurant", "Perdurant", "Quality", "Abstract"] for a DOLCE-seeded run
+  candidate_batch_size: 30      # cap on a level's size AND the trigger threshold for regrouping it
+  max_regroup_input: 90
+  max_regroup_rounds: 3
+  label_collision_threshold: 0.90
+  max_child_claim_share: 0.6
+  max_depth: null                # null (YAML) / None (Python) means uncapped -- see hierarchy_induction.HierarchyConfig
+  embed_batch_size: 32
+  context_max_examples: 10      # real corpus entity examples shown per type
+  context_max_subclasses: 5     # already-placed subclasses shown per type
+  max_parallel_workers: 8      # thread pool size for band 2+ (band 1 always runs sequentially)
+
+# ── Entity Deduplication + Class Assignment ───────────────────────────────────
+# Candidates are partitioned by shared immediate parent in the TypeHierarchy
+# first, then clustered with HDBSCAN within each partition.
+entity_canonicalization:
+  similarity_threshold: 0.85
+  max_merge_rounds: 5
+  max_parallel_workers: 8      # thread pool size for concurrent LLM cluster verification
+  max_cluster_size: 40
+
+# ── Domain/Range Constraint Induction ─────────────────────────────────────────
+# Confidence (PCA-style) thresholds applied once, at the very end, to the
+# direction-corrected, hierarchy-generalized (domain, range) pairs.
+constraints:
+  hard_threshold: 0.90
+  soft_threshold: 0.50
+  hint_threshold: 0.20

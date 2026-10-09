@@ -29,9 +29,11 @@ llm:
 
 # ── Embedding client ──────────────────────────────────────────────────────────
 embedding:
-  contriever_model: "facebook/contriever"
-  device: null                        # "cuda" | "cpu" | null (auto)
-  embed_batch_size: 64
+  contriever_model: "ai-forever/FRIDA"   # Russian-capable (facebook/contriever has no meaningful
+                                         # Russian coverage) -- see src/ontodisco/utils/dedup_base.py
+  device: "cuda:2"                    # pinned: GPUs 0/1 on this shared box are occupied by other
+                                       # jobs (near-OOM); "cuda" alone defaults to device 0
+  embed_batch_size: 32                 # FRIDA is larger than Contriever -- lower the batch if this OOMs
 
 # ── Relation Canonicalization ─────────────────────────────────────────────────
 # Candidate clustering is HDBSCAN (dedup_base.cluster_hdbscan) over the full

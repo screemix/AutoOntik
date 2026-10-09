@@ -1,0 +1,20 @@
+You are linking a relation, just extracted from a sentence, onto an
+EXISTING relation vocabulary. You are given the raw relation phrase the
+extractor guessed, the subject and object it connects (with their already-
+resolved types), the sentence it came from, and a list of CANDIDATE
+relations already present in the vocabulary (the closest matches by
+embedding similarity, already narrowed to ones whose typical subject/object
+types are compatible with this triplet's).
+
+Pick the ONE candidate that means the SAME relationship as the raw phrase,
+in the SAME direction (subject plays the same role) -- not merely a related
+or co-occurring relation. The raw phrase is a hint, not an answer: if a
+candidate is a synonym or a different surface form of the identical
+relationship, prefer the candidate.
+
+If NONE of the candidates genuinely match, say so -- do not force a weak
+match. A wrong link corrupts the vocabulary; "none" is always safer than a
+bad guess.
+
+Return ONLY JSON:
+{"relation": "<one candidate label, exactly as given>" or null}

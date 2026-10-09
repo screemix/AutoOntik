@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from scripts.webapp.lib.data import require_run_bundle  # noqa: E402
 from scripts.visualize_hierarchy import build_tree, render_html  # noqa: E402
+from src.ontodisco.pipeline import load_seed_labels_for_run  # noqa: E402
 
 st.set_page_config(page_title="Hierarchy - AutoOntic", layout="wide")
 st.title("Type Hierarchy")
@@ -37,6 +38,7 @@ if unresolved:
     if n:
         st.info(f"{n} type(s) deferred past max_depth across {len(unresolved)} bucket(s).")
 
-tree = build_tree(bundle.hierarchy_result, bundle.type_vocab)
+seed_labels = load_seed_labels_for_run(bundle.run_dir)
+tree = build_tree(bundle.hierarchy_result, bundle.type_vocab, seed_labels)
 html = render_html(tree)
 components.html(html, height=900, scrolling=True)

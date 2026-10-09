@@ -11,7 +11,9 @@ import streamlit.components.v1 as components
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from scripts.webapp.lib.data import require_run_bundle, load_triplets_cached, type_label_lookup  # noqa: E402
+from scripts.webapp.lib.data import (  # noqa: E402
+    require_run_bundle, load_triplets_cached, type_label_lookup, seed_type_ids,
+)
 from scripts.webapp.lib.graph import build_graph, color_group_for, type_selection_subgraph  # noqa: E402
 from scripts.webapp.components.type_tree_selector import type_tree_selector  # noqa: E402
 from scripts.webapp.lib.sandbox import subtree_ids  # noqa: E402
@@ -66,7 +68,10 @@ label_lookup = type_label_lookup(bundle)
 tree_nodes = [{"id": tid, "label": label} for tid, label in label_lookup.items()]
 tree_edges = [{"child": e.child_type_id, "parent": e.parent_type_id} for e in hierarchy.edges]
 
-selected_type_ids = type_tree_selector(tree_nodes, tree_edges, height=560, key="graph_type_tree")
+seed_ids = list(seed_type_ids(bundle))
+selected_type_ids = type_tree_selector(
+    tree_nodes, tree_edges, seed_ids=seed_ids, height=560, key="graph_type_tree",
+)
 
 if not selected_type_ids:
     st.info("Select one or more types above to render their entities.")

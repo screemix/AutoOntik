@@ -46,7 +46,7 @@ hierarchy:
   weeds_containment_threshold: 0.75
   priority_band_tolerance: 10
   seed_roots_path: "./configs/seeds/dolce.yaml"   # resolved by run_pipeline() at run time
-  candidate_batch_size: 30      # cap on a level's size AND the trigger threshold for regrouping it
+  candidate_batch_size: 50      # cap on a level's size AND the trigger threshold for regrouping it
   max_regroup_input: 90
   max_regroup_rounds: 3
   label_collision_threshold: 0.90

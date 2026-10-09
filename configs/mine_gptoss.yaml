@@ -16,7 +16,7 @@ include_qualifiers: true
 llm:
   model: "Openai/Gpt-oss-120b"
   api_key_env: "AIRI_KEY"
-  base_url: "https://inference.airi.net:46783/v1"
+  base_url: "https://inference.airi.net/v1"
   proxy_key_env: "PROXY_URL"
 
 embedding:
@@ -42,7 +42,7 @@ hierarchy:
   weeds_containment_threshold: 0.75
   priority_band_tolerance: 10
   seed_roots: []
-  candidate_batch_size: 30      # cap on a level's size AND the trigger threshold for regrouping it
+  candidate_batch_size: 50      # cap on a level's size AND the trigger threshold for regrouping it
   max_regroup_input: 90
   max_regroup_rounds: 3
   label_collision_threshold: 0.90

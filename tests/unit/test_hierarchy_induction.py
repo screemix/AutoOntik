@@ -263,6 +263,64 @@ def test_bulk_child_claim_is_rejected_but_small_claim_is_applied(monkeypatch):
     assert parent_of2 == {"alpha": "grabby", "beta": "grabby"}, parent_of2
 
 
+def test_resolve_or_mint_parent_is_race_free_across_concurrent_anchors(monkeypatch):
+    """Regression test for the check-then-act race: two threads proposing
+    the IDENTICAL new label from different anchors must not both conclude
+    "this is new" and mint two SynthesizedType records for it. Before the
+    fix, the collision check (read known_labels, release the lock, embed,
+    compare) and the registration (write known_labels) were two separate
+    critical sections, so both threads could pass the check before either
+    registered. Forcing the race deterministically: a barrier blocks every
+    thread INSIDE the embedding call (which runs unlocked) until all of
+    them have started, so every thread's check-phase genuinely overlaps."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from src.ontodisco.hierarchy_induction import SynthesizedType, _Node, _resolve_or_mint_parent
+
+    n_threads = 8
+    barrier = threading.Barrier(n_threads)
+
+    class _BarrierEmbedder:
+        """Waits on the barrier only on its FIRST call (the collision
+        check's candidate-embedding step) -- the winning thread's later,
+        second call (_embed_inline, registering the minted node's own
+        embedding) must not wait again, since by then the other threads
+        have already returned via the reuse fast path and will never show
+        up to release the barrier a second time."""
+        def __init__(self):
+            self._waited = False
+
+        def embed(self, texts, batch_size=None):
+            if not self._waited:
+                self._waited = True
+                barrier.wait()  # force every thread to overlap mid-collision-check
+            return np.zeros((len(texts), 4))
+
+    all_nodes: dict[str, _Node] = {}
+    synthesized: list[SynthesizedType] = []
+    synthetic_counter = [0]
+    counter_lock = threading.Lock()
+    known_labels: dict[str, str] = {}
+    known_lock = threading.Lock()
+    embedding_by_id: dict[str, np.ndarray] = {}
+    embed_lock = threading.Lock()
+
+    def _mint():
+        return _resolve_or_mint_parent(
+            "duplicate concept", "", all_nodes, synthesized, synthetic_counter, counter_lock,
+            known_labels, known_lock, embedding_by_id, _BarrierEmbedder(), embed_lock, 0.9,
+        )
+
+    with ThreadPoolExecutor(max_workers=n_threads) as pool:
+        results = list(pool.map(lambda _: _mint(), range(n_threads)))
+
+    ids = {r[0] for r in results}
+    assert len(ids) == 1, f"expected one shared id, got {ids}"
+    assert sum(1 for r in results if r[1]) == 1, "exactly one thread should have minted; the rest must reuse"
+    assert len(synthesized) == 1, f"exactly one SynthesizedType should exist, got {len(synthesized)}"
+
+
 def test_top_level_candidates_are_roots_not_unplaced_pool_members(monkeypatch):
     """An unplaced node is not a position in the tree, so it must never be
     offered as a top-level candidate. With four types and no matches at all,

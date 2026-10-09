@@ -1,0 +1,1873 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>AutoOntic Pipeline Demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+    rel="stylesheet">
+  <style>
+    :root {
+      --board: #f5f0e3;
+      --board-2: #ece2c9;
+      --card: #ecd8a0;
+      --card-edge: #bd9755;
+      --ink: #33230f;
+      --paper: #3a2c1b;
+      --muted: #7c6a52;
+      --muted-dim: #9a8a6e;
+      --thread: #a83f27;
+      --thread-dim: #c96b52;
+      --gold: #8a6a12;
+      --gold-dim: #b3921f;
+
+      --s-in: #8a6a12;
+      --s-extract: #c94f7c;
+      --s-relation: #3b6fd6;
+      --s-type: #1f9d96;
+      --s-hier: #7c4fd1;
+      --s-entity: #2f9e44;
+      --s-constraint: #d9822b;
+      --s-out: #8a6a12;
+
+      --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
+      --font-body: 'IBM Plex Sans', -apple-system, 'Segoe UI', Helvetica, sans-serif;
+      --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      height: 100%;
+    }
+
+    body {
+      margin: 0;
+      background: var(--board);
+      color: var(--paper);
+      font-family: var(--font-body);
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    ::selection {
+      background: var(--thread);
+      color: #fff;
+    }
+
+    :focus-visible {
+      outline: 2px solid var(--gold);
+      outline-offset: 2px;
+    }
+
+    .app {
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background:
+        radial-gradient(circle at 1px 1px, rgba(58, 44, 27, .06) 1px, transparent 1.6px) 0 0/22px 22px,
+        radial-gradient(1200px 700px at 18% -10%, rgba(255, 255, 255, .6), transparent 60%),
+        radial-gradient(1000px 600px at 100% 110%, rgba(58, 44, 27, .10), transparent 60%),
+        var(--board);
+    }
+
+    /* ---------- RAIL ---------- */
+    .rail {
+      flex: 0 0 auto;
+      padding: 14px clamp(16px, 3vw, 40px) 0;
+      border-bottom: 1px solid rgba(58, 44, 27, .12);
+    }
+
+    .rail-top {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    .brand {
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-size: clamp(13px, 1.4vw, 16px);
+      letter-spacing: .02em;
+      color: var(--paper);
+    }
+
+    .brand em {
+      font-style: normal;
+      color: var(--gold);
+    }
+
+    .brand small {
+      display: block;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--muted-dim);
+      margin-top: 1px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 6px;
+    }
+
+    .tab {
+      --sc: var(--muted);
+      flex: 1 1 0;
+      min-width: 0;
+      background: rgba(58, 44, 27, .04);
+      border: none;
+      border-bottom: 3px solid transparent;
+      border-radius: 7px 7px 0 0;
+      padding: 8px 4px 9px;
+      cursor: pointer;
+      color: var(--muted-dim);
+      font-family: var(--font-mono);
+      text-align: center;
+      transition: background .3s ease, color .3s ease, border-color .3s ease;
+    }
+
+    .tab .n {
+      display: block;
+      font-size: 9px;
+      letter-spacing: .08em;
+      opacity: .8;
+    }
+
+    .tab .l {
+      display: block;
+      font-size: 10.5px;
+      margin-top: 2px;
+      letter-spacing: .02em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tab:hover {
+      background: rgba(58, 44, 27, .07);
+      color: var(--paper);
+    }
+
+    .tab.active {
+      background: rgba(58, 44, 27, .09);
+      color: var(--paper);
+      border-bottom-color: var(--sc);
+    }
+
+    .tab.active .n {
+      color: var(--sc);
+    }
+
+    .rail-progress {
+      height: 2px;
+      background: rgba(58, 44, 27, .1);
+      margin-top: 10px;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .rail-progress>i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--thread-dim), var(--thread));
+      transition: width .5s ease;
+    }
+
+    /* ---------- BOARD ---------- */
+    .board-wrap {
+      flex: 1 1 auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 0;
+      padding: clamp(10px, 2vh, 26px) clamp(14px, 3vw, 40px);
+    }
+
+    .board {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      max-width: 1560px;
+    }
+
+    .scene {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity .5s ease;
+      pointer-events: none;
+    }
+
+    .scene.active {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+    }
+
+    .eyebrow {
+      position: absolute;
+      left: 0;
+      top: 0;
+      font-family: var(--font-mono);
+      font-size: clamp(10px, 1.05vw, 12.5px);
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .eyebrow b {
+      color: var(--sc, var(--gold));
+      font-weight: 600;
+    }
+
+    svg.wires {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+    }
+
+    .thread-draw {
+      fill: none;
+      stroke: var(--thread);
+      stroke-width: .7;
+      stroke-linecap: round;
+      opacity: .85;
+    }
+
+    .thread-draw.dim {
+      stroke: var(--muted-dim);
+      stroke-dasharray: 1.4 1.6 !important;
+      opacity: .6;
+    }
+
+    .thread-draw.is-a {
+      stroke: var(--s-hier);
+    }
+
+    .scene.run .thread-draw {
+      transition: stroke-dashoffset var(--td, .9s) ease;
+      transition-delay: var(--d, 0s);
+      stroke-dashoffset: 0;
+    }
+
+    /* generic reveal */
+    .appear {
+      position: absolute;
+      opacity: 0;
+      transform: translate(-50%, -46%) scale(.9);
+      transition: opacity .5s ease, transform .55s cubic-bezier(.22, .8, .32, 1);
+      transition-delay: var(--d, 0s);
+    }
+
+    .scene.run .appear {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+    }
+
+    .appear.tl {
+      transform: translate(0, -30%) scale(.94);
+    }
+
+    .scene.run .appear.tl {
+      transform: translate(0, 0) scale(1);
+    }
+
+    /* index cards / chips */
+    .card,
+    .chip {
+      font-family: var(--font-mono);
+      color: var(--ink);
+      background: var(--card);
+      border: 1px solid var(--card-edge);
+      border-radius: 3px;
+      box-shadow: 0 6px 14px -6px rgba(58, 44, 27, .32), 0 1px 0 rgba(255, 255, 255, .65) inset;
+      white-space: nowrap;
+    }
+
+    .card {
+      padding: 8px 14px;
+      font-size: clamp(11px, 1.05vw, 13.5px);
+    }
+
+    .chip {
+      padding: 6px 11px;
+      font-size: clamp(10px, .95vw, 12.5px);
+    }
+
+    .card.pin::before,
+    .chip.pin::before {
+      content: '';
+      position: absolute;
+      left: 50%;
+      top: -6px;
+      transform: translateX(-50%);
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 30%, #f2d98a, var(--gold-dim));
+      box-shadow: 0 2px 3px rgba(58, 44, 27, .4);
+    }
+
+    .card .type-tag {
+      display: inline-block;
+      margin-left: 6px;
+      font-size: .8em;
+      color: var(--sc, var(--s-relation));
+      opacity: .85;
+    }
+
+    .chip.ghost {
+      background: transparent;
+      color: var(--paper);
+      border: 1.4px dashed rgba(58, 44, 27, .35);
+      box-shadow: none;
+    }
+
+    .chip.unverified {
+      background: rgba(58, 44, 27, .05);
+      color: var(--paper);
+      border: 1.4px dashed rgba(58, 44, 27, .4);
+      box-shadow: none;
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .col {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .panel {
+      position: absolute;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: opacity .6s ease, transform .6s cubic-bezier(.22, .8, .32, 1);
+      transition-delay: var(--d, 0s);
+    }
+
+    .scene.run .panel {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .panel-title {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .panel-title b {
+      color: var(--sc, var(--gold));
+    }
+
+    .panel-body {
+      background: var(--board-2);
+      border: 1px solid rgba(58, 44, 27, .12);
+      border-radius: 8px;
+      padding: 16px 18px;
+    }
+
+    .text-scrap {
+      font-family: var(--font-display);
+      font-size: clamp(13px, 1.5vw, 17px);
+      line-height: 1.55;
+      color: var(--paper);
+    }
+
+    .text-scrap .hot {
+      position: relative;
+      padding: 0 2px;
+      border-radius: 2px;
+      background: rgba(168, 63, 39, 0);
+      color: var(--paper);
+      transition: background .5s ease, color .5s ease;
+      transition-delay: var(--d, 0s);
+      box-shadow: inset 0 -2px 0 0 rgba(168, 63, 39, 0);
+    }
+
+    .scene.run .text-scrap .hot {
+      background: rgba(168, 63, 39, .16);
+      box-shadow: inset 0 -2px 0 0 var(--hc, var(--thread));
+      color: var(--ink);
+    }
+
+    .triplet-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .arrow-lbl {
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      color: var(--s-extract);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .arrow-lbl svg {
+      width: 26px;
+      height: 8px;
+    }
+
+    .qual-line {
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .qual-line .k {
+      color: var(--gold);
+    }
+
+    /* stamps */
+    .stamp {
+      position: absolute;
+      transform: translate(-50%, -50%) rotate(var(--rot, -9deg)) scale(1.7);
+      opacity: 0;
+      font-family: var(--font-display);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      font-size: clamp(11px, 1.15vw, 14px);
+      padding: 5px 12px;
+      border-radius: 6px;
+      border: 2.5px solid var(--sc, var(--gold));
+      color: var(--sc, var(--gold));
+      background: rgba(255, 252, 242, .6);
+      transition: opacity .3s ease, transform .4s cubic-bezier(.34, 1.56, .64, 1);
+      transition-delay: var(--d, 0s);
+      pointer-events: none;
+    }
+
+    .scene.run .stamp {
+      opacity: 1;
+      transform: translate(-50%, -50%) rotate(var(--rot, -9deg)) scale(1);
+    }
+
+    .stamp.ok {
+      --sc: var(--gold);
+    }
+
+    .stamp.no {
+      --sc: var(--thread);
+    }
+
+    .lasso {
+      fill: rgba(58, 44, 27, .05);
+      stroke: var(--muted);
+      stroke-dasharray: 2.2 2;
+      opacity: 0;
+      transition: opacity .5s ease;
+      transition-delay: var(--d, 0s);
+    }
+
+    .scene.run .lasso {
+      opacity: .9;
+    }
+
+    /* scatter/settle chip movement */
+    .drift {
+      position: absolute;
+      left: var(--x0);
+      top: var(--y0);
+      transform: translate(-50%, -50%) rotate(var(--r0, 0deg));
+      opacity: .9;
+      transition:
+        left 1s cubic-bezier(.3, .7, .3, 1) var(--d, 0s),
+        top 1s cubic-bezier(.3, .7, .3, 1) var(--d, 0s),
+        transform 1s cubic-bezier(.3, .7, .3, 1) var(--d, 0s),
+        opacity .6s ease var(--vd, var(--d, 0s));
+    }
+
+    .scene.run .drift {
+      left: var(--x1);
+      top: var(--y1);
+      transform: translate(-50%, -50%) rotate(var(--r1, 0deg));
+    }
+
+    .scene.run .drift.vanish {
+      opacity: 0;
+    }
+
+    .route-dot {
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      margin: -10px 0 0 -10px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 30%, #ffe9a8, var(--gold));
+      box-shadow: 0 0 0 3px rgba(138, 106, 18, .25), 0 4px 10px rgba(58, 44, 27, .35);
+      left: var(--x0);
+      top: var(--y0);
+      opacity: 0;
+    }
+
+    .scene.run .route-dot {
+      animation: routeMove 2.6s ease-in-out forwards;
+      animation-delay: .7s;
+    }
+
+    @keyframes routeMove {
+      0% {
+        left: var(--x0);
+        top: var(--y0);
+        opacity: 0;
+      }
+
+      6% {
+        opacity: 1;
+      }
+
+      32% {
+        left: var(--x1);
+        top: var(--y1);
+      }
+
+      64% {
+        left: var(--x2);
+        top: var(--y2);
+      }
+
+      100% {
+        left: var(--x3);
+        top: var(--y3);
+        opacity: 1;
+      }
+    }
+
+    .bubble {
+      position: absolute;
+      transform: translate(-50%, -100%) scale(.85);
+      background: rgba(255, 252, 242, .95);
+      border: 1px solid rgba(58, 44, 27, .16);
+      color: var(--paper);
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      padding: 5px 9px;
+      border-radius: 6px;
+      white-space: nowrap;
+      opacity: 0;
+      transition: opacity .4s ease, transform .4s ease;
+      transition-delay: var(--d, 0s);
+    }
+
+    .bubble.ok {
+      border-color: var(--gold);
+      color: var(--gold);
+    }
+
+    .bubble.no {
+      border-color: var(--thread);
+      color: var(--thread);
+    }
+
+    .scene.run .bubble {
+      opacity: 1;
+      transform: translate(-50%, -130%) scale(1);
+    }
+
+    .zone {
+      position: absolute;
+      border: 1.4px dashed rgba(58, 44, 27, .3);
+      border-radius: 12px;
+      opacity: 0;
+      transition: opacity .6s ease;
+      transition-delay: var(--d, 0s);
+    }
+
+    .scene.run .zone {
+      opacity: 1;
+    }
+
+    .zone-label {
+      position: absolute;
+      top: -11px;
+      left: 14px;
+      background: var(--board);
+      padding: 0 8px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--sc, var(--muted));
+    }
+
+    .meter {
+      height: 10px;
+      border-radius: 6px;
+      background: rgba(58, 44, 27, .08);
+      overflow: hidden;
+      border: 1px solid rgba(58, 44, 27, .14);
+    }
+
+    .meter>i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--gold-dim), var(--gold));
+      transition: width 1.1s cubic-bezier(.2, .8, .2, 1);
+      transition-delay: var(--d, 0s);
+    }
+
+    .scene.run .meter>i {
+      width: var(--target, 90%);
+    }
+
+    .cut-x {
+      position: absolute;
+      transform: translate(-50%, -50%) scale(0);
+      color: var(--thread);
+      font-size: 18px;
+      font-weight: 700;
+      opacity: 0;
+      transition: opacity .3s ease, transform .4s cubic-bezier(.34, 1.56, .64, 1);
+      transition-delay: var(--d, 0s);
+    }
+
+    .scene.run .cut-x {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+    }
+
+    .chainlabel {
+      position: absolute;
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--sc, var(--muted));
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .miniGraph {
+      position: absolute;
+      opacity: 0;
+      transform: translate(-50%, -50%) scale(.92);
+      transition: opacity .6s ease, transform .6s cubic-bezier(.22, .8, .32, 1);
+      transition-delay: var(--d, 0s);
+    }
+
+    .scene.run .miniGraph {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+    }
+
+    .miniGraph svg {
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+      display: block;
+    }
+
+    .miniGraph .mg-label {
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      text-align: center;
+      margin-bottom: 6px;
+    }
+
+    .miniGraph .mg-note {
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      text-align: center;
+      margin-top: 6px;
+    }
+
+    .node-dot,
+    .edge-line {
+      opacity: 0;
+      transition: opacity .4s ease;
+      transition-delay: var(--d, 0s);
+    }
+
+    .scene.run .node-dot,
+    .scene.run .edge-line {
+      opacity: 1;
+    }
+
+    .arrow-head {
+      position: absolute;
+      width: 15px;
+      height: 8px;
+      margin: -4px 0 0 -3px;
+      color: var(--thread);
+      opacity: 0;
+      transition: opacity .35s ease;
+      transition-delay: var(--d, 0s);
+    }
+
+    .scene.run .arrow-head {
+      opacity: 1;
+    }
+
+    .arrow-head svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      overflow: visible;
+    }
+
+    .legend-row {
+      display: flex;
+      gap: 14px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      color: var(--muted);
+    }
+
+    .legend-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--sc, var(--muted));
+      flex: none;
+    }
+
+    .thread-draw.retract {
+      transition: stroke-dashoffset var(--td, .9s) ease var(--d, 0s), opacity .5s ease var(--rd, 2s);
+    }
+
+    .scene.run .thread-draw.retract {
+      stroke-dashoffset: 0;
+      opacity: 0;
+    }
+
+    /* ---------- SCENE M1 : why KGs ---------- */
+    #scene-m1 .corpus-card {
+      font-family: var(--font-display);
+      font-size: 11px;
+      line-height: 1.35;
+      text-align: left;
+      width: 180px;
+      white-space: normal;
+    }
+
+    #scene-m1 .miniGraph {
+      width: 19%;
+      height: 66%;
+    }
+
+    #scene-m1 .miniGraph.flat {
+      left: 63%;
+      top: 46%;
+    }
+
+    #scene-m1 .miniGraph.typed {
+      left: 87%;
+      top: 46%;
+    }
+
+    /* ---------- SCENE M2 : the ontology gap ---------- */
+    #scene-m2 .miniGraph {
+      width: 19%;
+      height: 58%;
+    }
+
+    #scene-m2 .miniGraph.flat {
+      left: 16%;
+      top: 50%;
+    }
+
+    #scene-m2 .miniGraph.typed {
+      left: 38%;
+      top: 50%;
+    }
+
+    #scene-m2 .req-chip {
+      text-align: left;
+    }
+
+    /* ---------- SCENE M3 : enter AutoOntic ---------- */
+    #scene-m3 .seal {
+      font-family: var(--font-display);
+      font-weight: 600;
+      letter-spacing: .01em;
+      color: var(--paper);
+      font-size: clamp(22px, 2.9vw, 38px);
+      white-space: nowrap;
+    }
+
+    #scene-m3 .seal em {
+      font-style: normal;
+      color: var(--gold);
+    }
+
+    #scene-m3 .finale {
+      left: 50%;
+      bottom: 5%;
+      top: auto;
+      text-align: center;
+      transform: translate(-50%, 10px);
+      width: 74%;
+    }
+
+    #scene-m3.run .finale {
+      transform: translate(-50%, 0);
+    }
+
+    #scene-m3 .finale h2 {
+      margin: 0;
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-size: clamp(16px, 2.1vw, 25px);
+      color: var(--paper);
+      text-wrap: balance;
+      max-width: 46ch;
+    }
+
+    #scene-m3 .finale p {
+      margin: 0 0 4px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--thread);
+    }
+
+    /* ---------- SCENE 0 ---------- */
+    #scene-0 .headline {
+      left: 6%;
+      top: 16%;
+      text-align: left;
+      transform-origin: left center;
+    }
+
+    #scene-0 .headline h1 {
+      margin: 0;
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-size: clamp(28px, 4vw, 50px);
+      color: var(--paper);
+    }
+
+    #scene-0 .headline h1 em {
+      font-style: normal;
+      color: var(--gold);
+    }
+
+    #scene-0 .headline p {
+      margin: 8px 0 0;
+      font-family: var(--font-mono);
+      font-size: clamp(11px, 1.2vw, 14px);
+      color: var(--muted);
+      max-width: 34ch;
+    }
+
+    #scene-0 .pin {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 30%, #fff6d8, var(--sc, var(--gold)));
+      box-shadow: 0 0 0 4px rgba(58, 44, 27, .08), 0 4px 8px rgba(58, 44, 27, .35);
+    }
+
+    #scene-0 .foot {
+      left: 50%;
+      bottom: 8%;
+      top: auto;
+      text-align: center;
+      font-family: var(--font-display);
+      font-style: normal;
+      font-size: clamp(13px, 1.5vw, 17px);
+      color: var(--paper);
+      transform: translate(-50%, 0);
+    }
+
+    #scene-0 .foot.appear {
+      transform: translate(-50%, 10px);
+    }
+
+    #scene-0.run .foot.appear {
+      transform: translate(-50%, 0);
+    }
+
+    /* ---------- SCENE 1 ---------- */
+    #scene-1 .panel.text-panel {
+      left: 4%;
+      top: 14%;
+      width: 42%;
+    }
+
+    #scene-1 .panel.triplet-panel {
+      left: 52%;
+      top: 8%;
+      width: 44%;
+    }
+
+    #scene-1 .triplet-panel .panel-body {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    #scene-1 .type-row {
+      display: flex;
+      gap: 16px;
+      margin-top: 2px;
+    }
+
+    #scene-1 .type-row span {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+    }
+
+    /* ---------- SCENE 2 & 3 shared scatter scenes ---------- */
+    .cluster-scene .top-labels {
+      left: 64%;
+      top: 8%;
+      width: 34%;
+    }
+
+    .cluster-scene .steps {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: flex-start;
+    }
+
+    .cluster-scene .step {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--muted);
+      padding: 5px 10px;
+      border-radius: 5px;
+      background: rgba(58, 44, 27, .04);
+      border: 1px solid rgba(58, 44, 27, .1);
+      opacity: .35;
+      transition: opacity .4s ease, color .4s ease, border-color .4s ease;
+      transition-delay: var(--d, 0s);
+    }
+
+    .scene.run.cluster-scene .step.lit {
+      opacity: 1;
+      color: var(--paper);
+      border-color: var(--sc, var(--gold));
+    }
+
+    /* ---------- SCENE 4 hierarchy ---------- */
+    #scene-4 .tree-node {
+      text-align: center;
+    }
+
+    #scene-4 .tree-note {
+      text-align: center;
+    }
+
+    /* ---------- SCENE 5 entities ---------- */
+    #scene-5 .zone-person {
+      left: 4%;
+      top: 14%;
+      width: 46%;
+      height: 72%;
+      --sc: var(--s-entity);
+    }
+
+    #scene-5 .zone-film {
+      left: 54%;
+      top: 14%;
+      width: 42%;
+      height: 26%;
+      --sc: var(--s-relation);
+    }
+
+    #scene-5 .zone-loc {
+      left: 54%;
+      top: 50%;
+      width: 42%;
+      height: 26%;
+      --sc: var(--s-type);
+    }
+
+    /* ---------- SCENE 6 constraints ---------- */
+    #scene-6 .rel-strip {
+      left: 50%;
+      top: 12%;
+      text-align: center;
+    }
+
+    #scene-6 .triple-card {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #scene-6 .triple-card .tag {
+      font-size: 9.5px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid currentColor;
+    }
+
+    /* ---------- SCENE 7 final KG ---------- */
+    #scene-7 .kgnode {
+      text-align: center;
+    }
+
+    #scene-7 .finale {
+      left: 50%;
+      bottom: 6%;
+      top: auto;
+      text-align: center;
+      transform: translate(-50%, 10px);
+    }
+
+    #scene-7.run .finale {
+      transform: translate(-50%, 0);
+    }
+
+    #scene-7 .finale h2 {
+      margin: 0;
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-size: clamp(15px, 2vw, 24px);
+      color: var(--paper);
+      text-wrap: balance;
+    }
+
+    #scene-7 .finale p {
+      margin: 4px 0 0;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    /* ---------- FOOTER / DECK ---------- */
+    .deck {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 12px clamp(16px, 3vw, 40px) 16px;
+      border-top: 1px solid rgba(58, 44, 27, .12);
+    }
+
+    .note {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-family: var(--font-mono);
+      font-size: clamp(11px, 1.15vw, 13.5px);
+      color: var(--paper);
+      border-left: 2px solid var(--thread);
+      padding-left: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .note::after {
+      content: '▌';
+      color: var(--thread);
+      margin-left: 2px;
+      animation: blink 1s step-end infinite;
+    }
+
+    @keyframes blink {
+      50% {
+        opacity: 0;
+      }
+    }
+
+    .transport {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex: 0 0 auto;
+    }
+
+    .tbtn {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(58, 44, 27, .04);
+      border: 1px solid rgba(58, 44, 27, .18);
+      color: var(--paper);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      transition: background .2s ease, border-color .2s ease;
+    }
+
+    .tbtn:hover {
+      background: rgba(58, 44, 27, .08);
+      border-color: var(--gold);
+    }
+
+    .dots {
+      display: flex;
+      gap: 6px;
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: rgba(58, 44, 27, .22);
+      border: none;
+      cursor: pointer;
+      padding: 0;
+    }
+
+    .dot.active {
+      background: var(--gold);
+      box-shadow: 0 0 0 3px rgba(138, 106, 18, .2);
+    }
+
+    .autobar {
+      width: 120px;
+      height: 3px;
+      background: rgba(58, 44, 27, .1);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .autobar>i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--thread);
+    }
+
+    .kbdhint {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--muted-dim);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      * {
+        transition-duration: .001ms !important;
+        animation-duration: .001ms !important;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="app">
+
+    <div class="rail">
+      <div class="rail-top">
+        <div class="brand">Auto<em>Ontic</em><small>Ontology Discovery Pipeline</small></div>
+        <div class="kbdhint">← → advance&nbsp;&nbsp;·&nbsp;&nbsp;space play/pause&nbsp;&nbsp;·&nbsp;&nbsp;r restart
+        </div>
+      </div>
+      <div class="tabs" id="tabs"></div>
+      <div class="rail-progress"><i id="railFill"></i></div>
+    </div>
+
+    <div class="board-wrap">
+      <div class="board" id="board">
+
+        <!-- SCENE M1 : WHY KNOWLEDGE GRAPHS -->
+        <section class="scene" id="scene-m1" data-sc="var(--thread)">
+          <div class="eyebrow" style="left:4%; top:2%; --sc:var(--thread);">Motivation &middot; <b>Why Knowledge
+              Graphs</b></div>
+
+          <div class="card pin appear corpus-card" style="left:16%; top:26%; --d:.2s;">&ldquo;Christopher Nolan directed
+            Oppenheimer&hellip;&rdquo;</div>
+          <div class="card pin appear corpus-card" style="left:20%; top:48%; --d:.4s;">&ldquo;The film premiered in
+            2023&hellip;&rdquo;</div>
+          <div class="card pin appear corpus-card" style="left:14%; top:70%; --d:.6s;">&ldquo;Nolan also directed
+            Inception, a science-fiction film&hellip;&rdquo;</div>
+          <div class="chainlabel appear" style="left:17%; top:88%; --d:.9s; --sc:var(--muted);">Flat retrieval struggles
+            with multi-hop connections</div>
+
+          <svg class="wires" viewBox="0 0 100 100" preserveAspectRatio="none">
+            <path class="thread-draw" style="--d:1.4s" d="M36,50 Q44,50 51,50"></path>
+          </svg>
+
+          <div class="miniGraph flat" style="--d:1.8s;">
+            <div class="mg-label">Untyped graph</div>
+            <svg viewBox="0 0 100 100">
+              <line class="edge-line" style="--d:2.0s" x1="25" y1="25" x2="70" y2="15" stroke="var(--muted)"
+                stroke-width="1.4" />
+              <line class="edge-line" style="--d:2.05s" x1="70" y1="15" x2="85" y2="55" stroke="var(--muted)"
+                stroke-width="1.4" />
+              <line class="edge-line" style="--d:2.1s" x1="85" y1="55" x2="50" y2="45" stroke="var(--muted)"
+                stroke-width="1.4" />
+              <line class="edge-line" style="--d:2.15s" x1="50" y1="45" x2="25" y2="25" stroke="var(--muted)"
+                stroke-width="1.4" />
+              <line class="edge-line" style="--d:2.2s" x1="25" y1="25" x2="20" y2="65" stroke="var(--muted)"
+                stroke-width="1.4" />
+              <line class="edge-line" style="--d:2.25s" x1="20" y1="65" x2="55" y2="80" stroke="var(--muted)"
+                stroke-width="1.4" />
+              <line class="edge-line" style="--d:2.3s" x1="55" y1="80" x2="85" y2="55" stroke="var(--muted)"
+                stroke-width="1.4" />
+              <line class="edge-line" style="--d:2.35s" x1="50" y1="45" x2="55" y2="80" stroke="var(--muted)"
+                stroke-width="1.4" />
+              <circle class="node-dot" style="--d:1.9s" cx="25" cy="25" r="4.5" fill="var(--muted)" />
+              <circle class="node-dot" style="--d:1.9s" cx="70" cy="15" r="4.5" fill="var(--muted)" />
+              <circle class="node-dot" style="--d:1.9s" cx="85" cy="55" r="4.5" fill="var(--muted)" />
+              <circle class="node-dot" style="--d:1.9s" cx="55" cy="80" r="4.5" fill="var(--muted)" />
+              <circle class="node-dot" style="--d:1.9s" cx="20" cy="65" r="4.5" fill="var(--muted)" />
+              <circle class="node-dot" style="--d:1.9s" cx="50" cy="45" r="4.5" fill="var(--muted)" />
+            </svg>
+            <div class="mg-note" style="color:var(--thread);">No external structure</div>
+          </div>
+
+          <div class="miniGraph typed" style="--d:3.0s;">
+            <div class="mg-label">Typed &amp; structured</div>
+            <svg viewBox="0 0 100 100">
+              <line class="edge-line" style="--d:3.2s" x1="50" y1="15" x2="25" y2="50" stroke="var(--s-hier)"
+                stroke-width="1.4" stroke-dasharray="3 2" />
+              <line class="edge-line" style="--d:3.25s" x1="50" y1="15" x2="75" y2="50" stroke="var(--s-hier)"
+                stroke-width="1.4" stroke-dasharray="3 2" />
+              <line class="edge-line" style="--d:3.3s" x1="25" y1="50" x2="15" y2="85" stroke="var(--s-hier)"
+                stroke-width="1.4" stroke-dasharray="3 2" />
+              <line class="edge-line" style="--d:3.35s" x1="75" y1="50" x2="55" y2="85" stroke="var(--s-hier)"
+                stroke-width="1.4" stroke-dasharray="3 2" />
+              <line class="edge-line" style="--d:3.4s" x1="75" y1="50" x2="85" y2="80" stroke="var(--s-hier)"
+                stroke-width="1.4" stroke-dasharray="3 2" />
+              <line class="edge-line" style="--d:3.6s" x1="15" y1="85" x2="55" y2="85" stroke="var(--gold)"
+                stroke-width="1.6" />
+              <circle class="node-dot" style="--d:3.1s" cx="50" cy="15" r="4.5" fill="var(--s-hier)" />
+              <circle class="node-dot" style="--d:3.15s" cx="25" cy="50" r="4.5" fill="var(--s-relation)" />
+              <circle class="node-dot" style="--d:3.2s" cx="75" cy="50" r="4.5" fill="var(--s-type)" />
+              <circle class="node-dot" style="--d:3.25s" cx="15" cy="85" r="4.5" fill="var(--s-relation)" />
+              <circle class="node-dot" style="--d:3.3s" cx="55" cy="85" r="4.5" fill="var(--s-type)" />
+              <circle class="node-dot" style="--d:3.35s" cx="85" cy="80" r="4.5" fill="var(--s-type)" />
+            </svg>
+            <div class="legend-row appear" style="position:relative; left:auto; top:auto; transform:none; --d:3.8s;">
+              <span class="legend-item"><span class="legend-dot" style="--sc:var(--s-relation);"></span>person</span>
+              <span class="legend-item"><span class="legend-dot" style="--sc:var(--s-type);"></span>film</span>
+            </div>
+            <div class="mg-note" style="color:var(--gold);">typed, multi-hop reasoning</div>
+          </div>
+        </section>
+
+        <!-- SCENE M2 : THE ONTOLOGY GAP -->
+        <section class="scene" id="scene-m2" data-sc="var(--thread)">
+          <div class="eyebrow" style="left:4%; top:2%; --sc:var(--thread);">Motivation &middot; <b>What a Useful KG
+              Needs</b></div>
+
+          <div class="miniGraph flat" style="--d:.1s;">
+            <div class="mg-label">Without types</div>
+            <svg viewBox="0 0 100 100">
+              <line class="edge-line" style="--d:.5s" x1="50" y1="55" x2="20" y2="20" stroke="var(--muted)"
+                stroke-width="1.4" />
+              <line class="edge-line" style="--d:.55s" x1="50" y1="55" x2="80" y2="20" stroke="var(--muted)"
+                stroke-width="1.4" />
+              <circle class="node-dot" style="--d:.3s" cx="50" cy="55" r="6" fill="var(--muted)" />
+              <circle class="node-dot" style="--d:.35s" cx="20" cy="20" r="4.5" fill="var(--muted)" />
+              <circle class="node-dot" style="--d:.4s" cx="80" cy="20" r="4.5" fill="var(--muted)" />
+              <text class="node-dot" style="--d:.3s; font-family:var(--font-mono); font-size:8px;" x="50" y="70"
+                text-anchor="middle" fill="var(--muted)">Paris</text>
+              <text class="node-dot" style="--d:.35s; font-family:var(--font-mono); font-size:6.5px;" x="20" y="12"
+                text-anchor="middle" fill="var(--muted)">France</text>
+              <text class="node-dot" style="--d:.4s; font-family:var(--font-mono); font-size:6.5px;" x="80" y="12"
+                text-anchor="middle" fill="var(--muted)">C. Nolan</text>
+            </svg>
+            <div class="mg-note" style="color:var(--thread);">two Parises fused into one node</div>
+          </div>
+
+          <div class="miniGraph typed" style="--d:1.6s;">
+            <div class="mg-label">With types</div>
+            <svg viewBox="0 0 100 100">
+              <line class="edge-line" style="--d:2.0s" x1="22" y1="60" x2="22" y2="20" stroke="var(--s-type)"
+                stroke-width="1.4" />
+              <line class="edge-line" style="--d:2.05s" x1="78" y1="60" x2="78" y2="20" stroke="var(--s-relation)"
+                stroke-width="1.4" />
+              <circle class="node-dot" style="--d:1.8s" cx="22" cy="60" r="5" fill="var(--s-type)" />
+              <circle class="node-dot" style="--d:1.85s" cx="22" cy="20" r="4.5" fill="var(--s-type)" />
+              <circle class="node-dot" style="--d:1.9s" cx="78" cy="60" r="5" fill="var(--s-relation)" />
+              <circle class="node-dot" style="--d:1.95s" cx="78" cy="20" r="4.5" fill="var(--s-relation)" />
+              <text class="node-dot" style="--d:1.8s; font-family:var(--font-mono); font-size:7px;" x="22" y="75"
+                text-anchor="middle" fill="var(--s-type)">Paris</text>
+              <text class="node-dot" style="--d:1.85s; font-family:var(--font-mono); font-size:6.5px;" x="22" y="12"
+                text-anchor="middle" fill="var(--s-type)">France</text>
+              <text class="node-dot" style="--d:1.9s; font-family:var(--font-mono); font-size:7px;" x="78" y="75"
+                text-anchor="middle" fill="var(--s-relation)">Paris</text>
+              <text class="node-dot" style="--d:1.95s; font-family:var(--font-mono); font-size:6.5px;" x="78" y="12"
+                text-anchor="middle" fill="var(--s-relation)">C. Nolan</text>
+            </svg>
+            <div class="legend-row appear" style="position:relative; left:auto; top:auto; transform:none; --d:2.3s;">
+              <span class="legend-item"><span class="legend-dot" style="--sc:var(--s-type);"></span>city</span>
+              <span class="legend-item"><span class="legend-dot" style="--sc:var(--s-relation);"></span>person</span>
+            </div>
+            <div class="mg-note" style="color:var(--gold);">correctly kept apart</div>
+          </div>
+
+          <div class="card pin appear req-chip" style="left:64%; top:18%; --sc:var(--gold); --d:2.8s;">Type vocabulary
+            <div style="font-size:9.5px; opacity:.7; margin-top:2px;">Person, Film, Genre&hellip;</div>
+          </div>
+          <div class="card pin appear req-chip" style="left:64%; top:48%; --sc:var(--s-hier); --d:3.4s;">Type hierarchy
+            <div style="font-size:9.5px; opacity:.7; margin-top:2px;">Film &rarr; Documentary Film</div>
+          </div>
+          <div class="card pin appear req-chip" style="left:64%; top:78%; --sc:var(--s-constraint); --d:4.0s;">Domain /
+            range constraints<div style="font-size:9.5px; opacity:.7; margin-top:2px;">directed: Person &rarr; Film
+            </div>
+          </div>
+
+          <svg class="wires" viewBox="0 0 100 100" preserveAspectRatio="none">
+            <path class="thread-draw" style="--d:2.6s" d="M48,32 Q54,26 58,20"></path>
+            <path class="thread-draw" style="--d:3.2s" d="M48,50 Q54,50 58,50"></path>
+            <path class="thread-draw" style="--d:3.8s" d="M48,68 Q54,74 58,78"></path>
+          </svg>
+
+          <div class="stamp no" style="left:32%; top:88%; --d:4.6s; --rot:-4deg;">built by hand</div>
+          <div class="appear"
+            style="left:32%; top:96%; --d:4.9s; color:var(--muted); font-family:var(--font-mono); font-size:10px; text-align:center; width:46%;">
+            expensive, and specific to every new domain</div>
+        </section>
+
+
+        <!-- SCENE 0 : OVERVIEW -->
+        <section class="scene" id="scene-0" data-sc="var(--s-in)">
+          <div class="appear tl headline" style="--d:.05s;">
+            <h1>Auto<em>Ontic</em></h1>
+            <p>Six LLM-adjudicated stages turn raw, unstructured text into a typed, hierarchical knowledge graph.</p>
+          </div>
+
+          <svg class="wires" viewBox="0 0 100 100" preserveAspectRatio="none">
+            <path class="thread-draw" style="--d:.4s; --td:2.2s;"
+              d="M8,58 L18,58 L28,58 L38,58 L48,58 L58,58 L68,58 L78,58 L88,58"></path>
+          </svg>
+
+          <div class="appear" style="left:8%; top:58%; --d:.4s;">
+            <div class="pin" style="--sc:var(--s-in)"></div>
+          </div>
+          <div class="chainlabel appear" style="left:8%; top:68%; --sc:var(--s-in); --d:.45s;">Text</div>
+
+          <div class="appear" style="left:22.6%; top:58%; --d:.75s;">
+            <div class="pin" style="--sc:var(--s-extract)"></div>
+          </div>
+          <div class="chainlabel appear" style="left:22.6%; top:68%; --sc:var(--s-extract); --d:.8s;">Extraction</div>
+
+          <div class="appear" style="left:37.1%; top:58%; --d:1.05s;">
+            <div class="pin" style="--sc:var(--s-relation)"></div>
+          </div>
+          <div class="chainlabel appear" style="left:37.1%; top:68%; --sc:var(--s-relation); --d:1.1s;">Relations</div>
+
+          <div class="appear" style="left:51.4%; top:58%; --d:1.35s;">
+            <div class="pin" style="--sc:var(--s-type)"></div>
+          </div>
+          <div class="chainlabel appear" style="left:51.4%; top:68%; --sc:var(--s-type); --d:1.4s;">Types</div>
+
+          <div class="appear" style="left:65.7%; top:58%; --d:1.65s;">
+            <div class="pin" style="--sc:var(--s-hier)"></div>
+          </div>
+          <div class="chainlabel appear" style="left:65.7%; top:68%; --sc:var(--s-hier); --d:1.7s;">Hierarchy</div>
+
+          <div class="appear" style="left:80%; top:58%; --d:1.95s;">
+            <div class="pin" style="--sc:var(--s-entity)"></div>
+          </div>
+          <div class="chainlabel appear" style="left:80%; top:68%; --sc:var(--s-entity); --d:2s;">Entities</div>
+
+          <div class="appear" style="left:88%; top:58%; --d:2.25s;">
+            <div class="pin" style="--sc:var(--s-constraint)"></div>
+          </div>
+          <div class="chainlabel appear" style="left:88%; top:68%; --sc:var(--s-constraint); --d:2.3s;">Constraints
+          </div>
+
+          <div class="foot appear" style="--d:2.6s;">One pass, top to bottom &mdash; an ontology-aware knowledge graph.
+          </div>
+        </section>
+
+        <!-- SCENE 1 : EXTRACTION -->
+        <section class="scene" id="scene-1" data-sc="var(--s-extract)">
+          <div class="eyebrow" style="left:4%; top:2%; --sc:var(--s-extract);">Step 0 &middot; <b>Schema-Free
+              Extraction</b></div>
+
+          <div class="panel text-panel" style="--d:.1s;">
+            <div class="panel-title">Raw text</div>
+            <div class="panel-body text-scrap">
+              <span class="hot" style="--d:.5s; --hc:var(--s-relation);">Christopher&nbsp;Nolan</span>
+              <span class="hot" style="--d:1.0s; --hc:var(--s-extract);">directed</span>
+              <span class="hot" style="--d:1.5s; --hc:var(--s-relation);">Oppenheimer</span>,
+              a <span class="hot" style="--d:2.0s; --hc:var(--s-type);">biographical film</span>
+              that premiered in <span class="hot" style="--d:2.5s; --hc:var(--gold);">2023</span>.
+            </div>
+          </div>
+
+          <div class="panel triplet-panel" style="--d:.3s;">
+            <div class="panel-title">Extracted <b style="color:var(--s-extract)">triplet</b></div>
+            <div class="panel-body">
+              <div class="triplet-row">
+                <span class="chip pin appear"
+                  style="position:relative; left:auto; top:auto; transform:none; --d:.7s;">Christopher Nolan</span>
+                <span class="arrow-lbl appear"
+                  style="position:relative; left:auto; top:auto; transform:none; --d:1.2s;">directed
+                  <svg viewBox="0 0 26 8">
+                    <path d="M0,4 H20 M15,1 L21,4 L15,7" fill="none" stroke="currentColor" stroke-width="1.3" />
+                  </svg>
+                </span>
+                <span class="chip pin appear"
+                  style="position:relative; left:auto; top:auto; transform:none; --d:1.7s;">Oppenheimer</span>
+              </div>
+              <div class="type-row">
+                <span class="appear"
+                  style="position:relative; left:auto; top:auto; transform:none; --d:2.0s; color:var(--s-relation);">[Person]</span>
+                <span class="appear"
+                  style="position:relative; left:auto; top:auto; transform:none; --d:2.2s; color:var(--s-type);">[Biographical
+                  Film]</span>
+              </div>
+              <div class="qual-line appear" style="position:relative; left:auto; top:auto; transform:none; --d:2.7s;">
+                <span class="k">qualifier &middot; point in time</span> &rarr; 2023
+              </div>
+            </div>
+          </div>
+
+          <svg class="wires" viewBox="0 0 100 100" preserveAspectRatio="none">
+            <path class="thread-draw" style="--d:.6s" d="M46,32 Q49,32 52,26"></path>
+            <path class="thread-draw" style="--d:1.1s" d="M46,40 Q49,40 52,40"></path>
+            <path class="thread-draw" style="--d:1.6s" d="M46,48 Q49,48 52,52"></path>
+          </svg>
+        </section>
+
+        <!-- SCENE 2 : RELATION CANONICALIZATION -->
+        <section class="scene cluster-scene" id="scene-2" data-sc="var(--s-relation)">
+          <div class="eyebrow" style="left:4%; top:2%; --sc:var(--s-relation);">Step 1 &middot; <b>Relation
+              Canonicalization</b></div>
+
+          <div class="panel top-labels" style="--d:.1s;">
+            <div class="steps">
+              <div class="step lit" style="--d:.2s; --sc:var(--s-relation);">① Contriever embeddings</div>
+              <div class="step lit" style="--d:1.6s; --sc:var(--s-relation);">② HDBSCAN clustering</div>
+              <div class="step lit" style="--d:3.0s; --sc:var(--gold);">③ LLM verifies the merge</div>
+            </div>
+          </div>
+
+          <ellipse class="lasso" style="--d:1.6s;" cx="34%" cy="56%" rx="15%" ry="17%"></ellipse>
+
+          <div class="chip unverified drift vanish" style="--x0:14%; --y0:30%; --x1:30%; --y1:44%; --d:.9s; --vd:3.6s;">
+            directing</div>
+          <div class="chip unverified drift vanish"
+            style="--x0:30%; --y0:22%; --x1:40%; --y1:47%; --d:1.0s; --vd:3.6s;">helmed</div>
+          <div class="chip unverified drift vanish"
+            style="--x0:12%; --y0:68%; --x1:28%; --y1:66%; --d:1.1s; --vd:3.6s;">directed</div>
+          <div class="chip unverified drift vanish"
+            style="--x0:44%; --y0:78%; --x1:38%; --y1:66%; --d:1.2s; --vd:3.6s;">was directed by</div>
+
+          <div class="chip unverified drift" style="--x0:82%; --y0:30%; --x1:82%; --y1:34%; --d:.3s;">starred in</div>
+          <div class="appear"
+            style="left:82%; top:50%; --d:3.2s; color:var(--muted); font-family:var(--font-mono); font-size:10.5px;">
+            separate cluster<br>(not merged)</div>
+
+          <div class="stamp ok" style="left:34%; top:40%; --d:3.1s; --rot:-8deg;">&#10003; merge</div>
+
+          <div class="card pin appear" style="left:34%; top:82%; --sc:var(--s-relation); --d:3.8s;">
+            directed <span class="type-tag" style="--sc:var(--s-relation);">canonical relation</span>
+          </div>
+        </section>
+
+        <!-- SCENE 3 : TYPE CANONICALIZATION + HYPONYMY -->
+        <section class="scene cluster-scene" id="scene-3" data-sc="var(--s-type)">
+          <div class="eyebrow" style="left:4%; top:2%; --sc:var(--s-type);">Step 2 &middot; <b>Type Canonicalization</b>
+          </div>
+
+          <div class="panel top-labels" style="--d:.1s;">
+            <div class="steps">
+              <div class="step lit" style="--d:.2s; --sc:var(--s-type);">Same embed &middot; cluster &middot; verify
+              </div>
+              <div class="step lit" style="--d:2.4s; --sc:var(--gold);">plus a hyponymy test</div>
+            </div>
+          </div>
+
+          <ellipse class="lasso" style="--d:1.0s;" cx="40%" cy="52%" rx="20%" ry="20%"></ellipse>
+
+          <div class="chip unverified drift" style="--x0:20%; --y0:26%; --x1:33%; --y1:44%; --d:.5s;">movie</div>
+          <div class="chip unverified drift" style="--x0:14%; --y0:66%; --x1:33%; --y1:56%; --d:.6s;">film</div>
+          <div class="chip unverified drift vanish" style="--x0:58%; --y0:32%; --x1:56%; --y1:50%; --d:.7s; --vd:3.6s;">
+            documentary film</div>
+
+          <div class="stamp ok" style="left:33%; top:36%; --d:2.0s; --rot:-6deg;">&#10003; synonym</div>
+          <div class="card pin appear" style="left:33%; top:78%; --sc:var(--s-type); --d:2.7s;">
+            film <span class="type-tag" style="--sc:var(--s-type);">canonical type</span>
+          </div>
+
+          <div class="bubble no" style="left:56%; top:38%; --d:3.3s;">is every film a documentary film? no.</div>
+          <div class="stamp no" style="left:70%; top:78%; --d:4.1s; --rot:7deg;">&#10007; split</div>
+
+          <div class="chip pin drift" style="--x0:56%; --y0:50%; --x1:70%; --y1:60%; --d:3.7s;">documentary film</div>
+
+          <svg class="wires" viewBox="0 0 100 100" preserveAspectRatio="none">
+            <path class="thread-draw is-a dim" style="--d:4.6s" d="M70,64 Q60,72 33,74"></path>
+          </svg>
+          <div class="appear"
+            style="left:50%; top:88%; --d:4.9s; color:var(--muted); font-family:var(--font-mono); font-size:10px;">is-a
+            &mdash; kept distinct, sent to hierarchy induction</div>
+        </section>
+
+        <!-- SCENE 4 : HIERARCHY INDUCTION -->
+        <section class="scene" id="scene-4" data-sc="var(--s-hier)">
+          <div class="eyebrow" style="left:4%; top:2%; --sc:var(--s-hier);">Step 3 &middot; <b>Hierarchy Induction</b>
+          </div>
+
+          <svg class="wires" viewBox="0 0 100 100" preserveAspectRatio="none">
+            <!-- existing tree, film's current children -->
+            <path class="thread-draw is-a" style="--d:.2s" d="M50,13 Q30,26 10,35"></path>
+            <path class="thread-draw is-a retract" style="--d:.3s; --rd:3.0s;" d="M50,13 Q40,26 29,35"></path>
+            <path class="thread-draw is-a retract" style="--d:.4s; --rd:3.0s;" d="M50,13 Q48,26 45,35"></path>
+            <path class="thread-draw is-a retract" style="--d:.5s; --rd:5.4s;" d="M50,13 Q54,26 58,35"></path>
+            <path class="thread-draw is-a retract" style="--d:.6s; --rd:5.4s;" d="M50,13 Q68,26 74,35"></path>
+            <path class="thread-draw is-a" style="--d:.7s" d="M50,13 Q75,26 90,35"></path>
+            <!-- "war film" arrives: parent check finds film, child check reattaches two existing siblings beneath it -->
+            <path class="thread-draw is-a" style="--d:3.0s" d="M50,13 Q44,26 37,35"></path>
+            <path class="thread-draw is-a" style="--d:3.1s" d="M37,41 Q32,52 29,61"></path>
+            <path class="thread-draw is-a" style="--d:3.2s" d="M37,41 Q41,52 45,61"></path>
+            <!-- consolidation: too many siblings at this level, so western/noir get a synthesized parent -->
+            <path class="thread-draw is-a" style="--d:5.5s" d="M50,13 Q58,26 66,35"></path>
+            <path class="thread-draw is-a" style="--d:5.6s" d="M66,41 Q63,52 60,61"></path>
+            <path class="thread-draw is-a" style="--d:5.7s" d="M66,41 Q69,52 72,61"></path>
+          </svg>
+
+          <div class="card pin appear tree-node" style="left:50%; top:10%; --sc:var(--s-hier); --d:.1s;">film</div>
+          <div class="card pin appear tree-node" style="left:10%; top:38%; --sc:var(--s-hier); --d:.2s;">documentary
+            film</div>
+          <div class="card pin drift tree-node" style="--x0:29%; --y0:38%; --x1:29%; --y1:64%; --d:3.0s;">World War II
+            film</div>
+          <div class="card pin drift tree-node" style="--x0:45%; --y0:38%; --x1:45%; --y1:64%; --d:3.1s;">Vietnam War
+            film</div>
+          <div class="card pin drift vanish tree-node"
+            style="--x0:58%; --y0:38%; --x1:58%; --y1:38%; --d:.3s; --vd:5.4s;">western</div>
+          <div class="card pin drift vanish tree-node"
+            style="--x0:74%; --y0:38%; --x1:74%; --y1:38%; --d:.4s; --vd:5.4s;">noir</div>
+          <div class="card pin appear tree-node" style="left:90%; top:38%; --sc:var(--s-hier); --d:.5s;">courtroom drama
+          </div>
+
+          <div class="chip pin appear tree-node"
+            style="left:94%; top:10%; --sc:var(--gold); --d:.1s; border-color:var(--gold);">new type: war film</div>
+          <div class="route-dot"
+            style="--x0:93%; --y0:11%; --x1:50%; --y1:11%; --x2:50%; --y2:24%; --x3:37%; --y3:38%;"></div>
+
+          <div class="bubble ok" style="left:50%; top:20%; --d:1.4s;">parent check &rarr; film &#10003;</div>
+          <div class="bubble ok" style="left:37%; top:30%; --d:2.4s;">child check &#10003; &mdash; reattach both</div>
+          <div class="card pin appear tree-node" style="left:37%; top:38%; --sc:var(--s-hier); --d:3.0s;">war film</div>
+
+          <div class="bubble no" style="left:58%; top:26%; --d:4.0s;">5 siblings here &mdash; exceeds B=4</div>
+          <div class="stamp ok" style="left:66%; top:20%; --d:4.8s; --rot:-6deg;">consolidate</div>
+
+          <div class="card pin drift tree-node" style="--x0:58%; --y0:38%; --x1:60%; --y1:64%; --d:5.5s;">western</div>
+          <div class="card pin drift tree-node" style="--x0:74%; --y0:38%; --x1:72%; --y1:64%; --d:5.5s;">noir</div>
+          <div class="card pin appear tree-node"
+            style="left:66%; top:38%; --sc:var(--gold); border-color:var(--gold); --d:5.5s;">
+            film style <span class="type-tag" style="--sc:var(--gold)">synthesized</span>
+          </div>
+
+          <div class="appear"
+            style="left:50%; top:92%; --d:6.3s; color:var(--muted); font-family:var(--font-mono); font-size:10.5px; text-align:center; width:88%;">
+            Parent and child checks route or reattach; a branch past B candidates gets consolidated under a synthesized
+            parent.
+          </div>
+        </section>
+
+        <!-- SCENE 5 : ENTITY DEDUPLICATION -->
+        <section class="scene" id="scene-5" data-sc="var(--s-entity)">
+          <div class="eyebrow" style="left:4%; top:2%; --sc:var(--s-entity);">Step 4 &middot; <b>Entity
+              Deduplication</b></div>
+
+          <div class="zone zone-person" style="--d:.1s;"><span class="zone-label">Person &middot; branch A</span></div>
+          <div class="zone zone-film" style="--d:.2s;"><span class="zone-label">Film &middot; branch B</span></div>
+          <div class="zone zone-loc" style="--d:.3s;"><span class="zone-label">Location &middot; branch C</span></div>
+
+          <svg class="wires" viewBox="0 0 100 100" preserveAspectRatio="none">
+            <path class="thread-draw" style="--d:1.0s" d="M16,34 L26,50"></path>
+            <path class="thread-draw" style="--d:1.2s" d="M26,50 L18,64"></path>
+            <path class="thread-draw" style="--d:1.4s" d="M18,64 L16,34"></path>
+            <path class="thread-draw dim" style="--d:2.6s" d="M20,76 Q45,88 72,64"></path>
+          </svg>
+
+          <div class="chip pin drift" style="--x0:16%; --y0:34%; --x1:22%; --y1:52%; --d:.8s;">Christopher Nolan</div>
+          <div class="chip pin drift vanish" style="--x0:26%; --y0:50%; --x1:22%; --y1:52%; --d:.8s; --vd:2.6s;">Chris
+            Nolan</div>
+          <div class="chip pin drift vanish" style="--x0:18%; --y0:64%; --x1:22%; --y1:52%; --d:.8s; --vd:2.6s;">C.
+            Nolan</div>
+          <div class="stamp ok" style="left:22%; top:52%; --d:2.0s; --rot:-5deg;">&#10003; merge</div>
+
+          <div class="chip ghost appear" style="left:20%; top:76%; --d:2.0s;">Paris <span
+              style="opacity:.6">[person]</span></div>
+          <div class="chip pin appear" style="left:72%; top:64%; --sc:var(--s-type); --d:.9s;">Paris <span
+              style="opacity:.6">[city]</span></div>
+          <div class="cut-x" style="left:45%; top:79%; --d:3.1s;">&#10005;</div>
+          <div class="bubble no" style="left:45%; top:79%; --d:3.4s;">different branch &mdash; never even compared</div>
+
+          <div class="chip pin appear" style="left:75%; top:26%; --sc:var(--s-relation); --d:.9s;">Oppenheimer <span
+              style="opacity:.6">[film]</span></div>
+        </section>
+
+        <!-- SCENE 6 : CONSTRAINTS -->
+        <section class="scene" id="scene-6" data-sc="var(--s-constraint)">
+          <div class="eyebrow" style="left:4%; top:2%; --sc:var(--s-constraint);">Step 5 &middot; <b>Domain / Range
+              Constraints</b></div>
+
+          <div class="appear rel-strip" style="--d:.1s;">
+            <div class="row" style="justify-content:center;">
+              <span class="chip pin"
+                style="position:relative; --sc:var(--s-relation); border-color:var(--s-relation);">Person</span>
+              <span class="arrow-lbl" style="position:relative; color:var(--s-constraint);">directed
+                <svg viewBox="0 0 26 8">
+                  <path d="M0,4 H20 M15,1 L21,4 L15,7" fill="none" stroke="currentColor" stroke-width="1.3" />
+                </svg>
+              </span>
+              <span class="chip pin"
+                style="position:relative; --sc:var(--s-type); border-color:var(--s-type);">Film</span>
+            </div>
+          </div>
+
+          <div class="appear" style="left:28%; top:38%; --d:.7s;">
+            <div class="triple-card">
+              <span class="chip pin" style="position:relative;">Christopher Nolan</span>
+              <span class="tag" style="color:var(--gold);">forward</span>
+              <span class="arrow-lbl"><svg viewBox="0 0 26 8">
+                  <path d="M0,4 H20 M15,1 L21,4 L15,7" fill="none" stroke="currentColor" stroke-width="1.3" />
+                </svg></span>
+              <span class="chip pin" style="position:relative;">Oppenheimer</span>
+            </div>
+          </div>
+
+          <div class="chip pin drift" style="--x0:30%; --y0:58%; --x1:70%; --y1:58%; --d:2.2s;">Oppenheimer</div>
+          <div class="chip pin drift" style="--x0:70%; --y0:58%; --x1:30%; --y1:58%; --d:2.2s;">Christopher Nolan</div>
+          <div class="appear"
+            style="left:50%; top:58%; --d:2.2s; font-family:var(--font-mono); font-size:11px; color:var(--thread);">
+            &laquo; was directed by &raquo; <span style="opacity:.7">(inverted surface form)</span></div>
+          <div class="appear"
+            style="left:50%; top:66%; --d:3.4s; font-family:var(--font-mono); font-size:11px; color:var(--gold);">
+            direction resolved &mdash; same canonical relation as row above</div>
+
+          <div class="appear" style="left:50%; top:82%; --d:4.0s; width:52%;">
+            <div class="row"
+              style="justify-content:space-between; font-family:var(--font-mono); font-size:10.5px; color:var(--muted); margin-bottom:4px;">
+              <span>domain = Person &middot; range = Film</span><span>92%</span>
+            </div>
+            <div class="meter" style="--target:92%;"><i></i></div>
+          </div>
+          <div class="stamp ok" style="left:88%; top:82%; --d:4.8s; --rot:6deg;">hard</div>
+        </section>
+
+        <!-- SCENE 7 : FINAL KG -->
+        <section class="scene" id="scene-7" data-sc="var(--s-out)">
+          <div class="eyebrow" style="left:4%; top:2%; --sc:var(--s-out);">Output</div>
+
+          <svg class="wires" viewBox="0 0 100 100" preserveAspectRatio="none">
+            <path class="thread-draw is-a" style="--d:.2s" d="M50,15 L50,31"></path>
+            <path class="thread-draw is-a dim" style="--d:1.6s" d="M50,40 L50,55"></path>
+            <path class="thread-draw" style="--d:2.0s" d="M22,55 L45,59"></path>
+            <path class="thread-draw" style="--d:2.4s" d="M54,60 L75,57"></path>
+          </svg>
+          <div class="arrow-head" style="left:50%; top:32%; --d:1.1s; transform:rotate(90deg); color:var(--s-hier);">
+
+          </div>
+          <div class="arrow-head" style="left:50%; top:56%; --d:2.5s; transform:rotate(90deg); color:var(--s-hier);">
+
+          </div>
+          <div class="arrow-head" style="left:46%; top:59%; --d:2.9s; transform:rotate(9deg);"><svg viewBox="0 0 26 8">
+              <path d="M0,4 H20 M15,1 L21,4 L15,7" fill="none" stroke="currentColor" stroke-width="1.6" />
+            </svg></div>
+          <div class="arrow-head" style="left:76%; top:57%; --d:3.3s; transform:rotate(-8deg);"><svg viewBox="0 0 26 8">
+              <path d="M0,4 H20 M15,1 L21,4 L15,7" fill="none" stroke="currentColor" stroke-width="1.6" />
+            </svg></div>
+
+          <div class="card pin appear kgnode" style="left:50%; top:12%; --sc:var(--s-type); --d:.1s;">film <span
+              class="type-tag" style="--sc:var(--s-type)">type</span></div>
+          <div class="card pin appear kgnode" style="left:50%; top:36%; --sc:var(--s-hier); --d:.5s;">biographical film
+            <span class="type-tag" style="--sc:var(--s-hier)">type</span>
+          </div>
+
+          <div class="card pin appear kgnode" style="left:18%; top:56%; --sc:var(--s-relation); --d:1.0s;">Christopher
+            Nolan <span class="type-tag" style="--sc:var(--s-relation)">Person</span></div>
+          <div class="card pin appear kgnode" style="left:50%; top:60%; --sc:var(--s-hier); --d:1.4s;">Oppenheimer <span
+              class="type-tag" style="--sc:var(--s-hier)">Biographical Film</span></div>
+          <div class="card pin appear kgnode" style="left:80%; top:56%; --sc:var(--s-relation); --d:1.8s;">J. Robert
+            Oppenheimer <span class="type-tag" style="--sc:var(--s-relation)">Person</span></div>
+
+          <div class="chainlabel appear" style="left:33%; top:50%; --d:2.0s; --sc:var(--gold);">directed &middot; 2023
+          </div>
+          <div class="chainlabel appear" style="left:65%; top:50%; --d:2.6s; --sc:var(--s-extract);">about</div>
+
+          <div class="finale appear" style="--d:3.3s;">
+            <p>the result</p>
+            <h2>An ontology-aware knowledge graph, straight from text.</h2>
+          </div>
+        </section>
+
+      </div>
+    </div>
+
+    <div class="deck">
+      <div class="note" id="caption"></div>
+      <div class="autobar"><i id="autobarFill"></i></div>
+      <div class="transport">
+        <button class="tbtn" id="btnPrev" aria-label="Previous scene">&#9664;</button>
+        <button class="tbtn" id="btnPlay" aria-label="Play or pause">&#9654;</button>
+        <button class="tbtn" id="btnNext" aria-label="Next scene">&#9654;&#9654;</button>
+        <div class="dots" id="dots"></div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    (function () {
+      const SCENES = [
+        { label: 'Why KGs', n: '00', sc: 'var(--thread)', dur: 7500, caption: 'Knowledge graphs can make retrieval-augmented generation more structured and support reasoning across multiple entities and documents.' },
+        { label: 'Ontology', n: '01', sc: 'var(--thread)', dur: 11000, caption: 'A useful knowledge graph needs an ontology — a vocabulary of types, a hierarchy between them, and constraints on which types can fill each relation. Building one by hand is expensive and domain-specific.' },
+        { label: 'AutoOntic', n: '02', sc: 'var(--s-in)', dur: 5200, caption: 'Text in. An ontology-aware knowledge graph out.' },
+        { label: 'Extraction', n: '03', sc: 'var(--s-extract)', dur: 6800, caption: 'Schema-free extraction: triplets, types, and qualifiers, straight from raw text.' },
+        { label: 'Relations', n: '04', sc: 'var(--s-relation)', dur: 6800, caption: 'Relation canonicalization: Contriever embeddings + HDBSCAN clusters, LLM-verified merges.' },
+        { label: 'Types', n: '05', sc: 'var(--s-type)', dur: 6800, caption: 'Type canonicalization: the same procedure, plus a hyponymy check — film ≠ documentary film.' },
+        { label: 'Hierarchy', n: '06', sc: 'var(--s-hier)', dur: 7800, caption: 'Hierarchy induction: parent and child checks route or reattach types; oversized branches are consolidated under a synthesized parent.' },
+        { label: 'Entities', n: '07', sc: 'var(--s-entity)', dur: 5800, caption: 'Entity deduplication: entities are compared only when the hierarchy says their types are compatible.' },
+        { label: 'Constraints', n: '08', sc: 'var(--s-constraint)', dur: 5800, caption: 'Constraint induction: relation direction + hierarchy generalization → domain/range confidence.' },
+        { label: 'Output', n: '09', sc: 'var(--s-out)', dur: 5200, caption: 'The result: an ontology-aware knowledge graph, produced directly from text.' }
+      ];
+
+      const board = document.getElementById('board');
+      const scenes = Array.from(board.querySelectorAll('.scene'));
+      const tabsEl = document.getElementById('tabs');
+      const dotsEl = document.getElementById('dots');
+      const railFill = document.getElementById('railFill');
+      const captionEl = document.getElementById('caption');
+      const autobarFill = document.getElementById('autobarFill');
+      const playBtn = document.getElementById('btnPlay');
+
+      SCENES.forEach((s, i) => {
+        const t = document.createElement('button');
+        t.className = 'tab';
+        t.style.setProperty('--sc', s.sc);
+        t.innerHTML = '<span class="n">' + s.n + '</span><span class="l">' + s.label + '</span>';
+        t.addEventListener('click', () => goTo(i));
+        tabsEl.appendChild(t);
+
+        const d = document.createElement('button');
+        d.className = 'dot';
+        d.setAttribute('aria-label', 'Go to scene ' + (i + 1));
+        d.addEventListener('click', () => goTo(i));
+        dotsEl.appendChild(d);
+      });
+      const tabs = Array.from(tabsEl.children);
+      const dots = Array.from(dotsEl.children);
+
+      // precompute svg path lengths for draw-in threads
+      scenes.forEach(scene => {
+        scene.querySelectorAll('path.thread-draw').forEach(p => {
+          try {
+            const len = p.getTotalLength();
+            p.style.strokeDasharray = len;
+            p.style.strokeDashoffset = len;
+          } catch (e) { }
+        });
+      });
+
+      let current = 0;
+      let playing = false;
+      let timer = null;
+      let typeTimer = null;
+
+      function retrigger(el) {
+        el.classList.remove('run');
+        void el.offsetWidth;
+        requestAnimationFrame(() => el.classList.add('run'));
+      }
+
+      function typeCaption(text) {
+        clearInterval(typeTimer);
+        captionEl.textContent = '';
+        let i = 0;
+        typeTimer = setInterval(() => {
+          captionEl.textContent += text[i];
+          i++;
+          if (i >= text.length) clearInterval(typeTimer);
+        }, 16);
+      }
+
+      function restartAutobar() {
+        clearTimeout(timer);
+        autobarFill.style.transition = 'none';
+        autobarFill.style.width = '0%';
+        void autobarFill.offsetWidth;
+        if (playing) {
+          const dur = SCENES[current].dur;
+          autobarFill.style.transition = 'width ' + dur + 'ms linear';
+          requestAnimationFrame(() => autobarFill.style.width = '100%');
+          timer = setTimeout(() => goTo(current + 1), dur);
+        }
+      }
+
+      function goTo(i) {
+        current = ((i % SCENES.length) + SCENES.length) % SCENES.length;
+        scenes.forEach((el, idx) => el.classList.toggle('active', idx === current));
+        tabs.forEach((el, idx) => el.classList.toggle('active', idx === current));
+        dots.forEach((el, idx) => el.classList.toggle('active', idx === current));
+        retrigger(scenes[current]);
+        typeCaption(SCENES[current].caption);
+        railFill.style.width = (current / (SCENES.length - 1) * 100) + '%';
+        restartAutobar();
+      }
+
+      function play() {
+        playing = true;
+        playBtn.innerHTML = '&#10074;&#10074;';
+        restartAutobar();
+      }
+      function pause() {
+        playing = false;
+        playBtn.innerHTML = '&#9654;';
+        clearTimeout(timer);
+        autobarFill.style.transition = 'none';
+        autobarFill.style.width = '0%';
+      }
+      function togglePlay() { playing ? pause() : play(); }
+
+      document.getElementById('btnPrev').addEventListener('click', () => goTo(current - 1));
+      document.getElementById('btnNext').addEventListener('click', () => goTo(current + 1));
+      playBtn.addEventListener('click', togglePlay);
+
+      document.addEventListener('keydown', (e) => {
+        if (e.code === 'ArrowRight') { e.preventDefault(); goTo(current + 1); }
+        else if (e.code === 'ArrowLeft') { e.preventDefault(); goTo(current - 1); }
+        else if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+        else if (e.key === 'r' || e.key === 'R') { goTo(0); }
+      });
+
+      goTo(0);
+    })();
+  </script>
+</body>
+
+</html>

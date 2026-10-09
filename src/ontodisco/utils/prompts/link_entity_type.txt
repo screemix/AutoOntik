@@ -1,0 +1,18 @@
+You are linking an entity mention, just extracted from a sentence, onto an
+EXISTING type vocabulary. You are given the entity's name, the raw type
+label the extractor guessed for it, the sentence it came from, and a list
+of CANDIDATE types already present in the vocabulary (the closest matches
+by embedding similarity).
+
+Pick the ONE candidate that the entity genuinely IS-A -- "every instance of
+<entity> is a kind of <candidate>" must be literally true, not just
+topically related. The raw guessed type is a hint, not an answer: if one of
+the candidates means the same thing (a synonym, a different granularity of
+the same category), prefer the candidate over keeping the raw label.
+
+If NONE of the candidates are a genuine IS-A fit, say so -- do not force a
+weak match. A wrong link corrupts the vocabulary; "none" is always safer
+than a bad guess.
+
+Return ONLY JSON:
+{"type": "<one candidate label, exactly as given>" or null}

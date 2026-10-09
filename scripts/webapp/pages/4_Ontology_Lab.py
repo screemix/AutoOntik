@@ -22,7 +22,9 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from scripts.webapp.lib.data import require_run_bundle, load_triplets_cached, type_label_lookup  # noqa: E402
+from scripts.webapp.lib.data import (  # noqa: E402
+    require_run_bundle, load_triplets_cached, type_label_lookup, seed_type_ids,
+)
 from scripts.webapp.lib.sandbox import (  # noqa: E402
     affected_type_ids, demo_delete_subtree, demo_reparent, diff_affected_constraints,
     diff_delete_impact, diff_merge_candidates, run_sandbox_remerge, save_sandbox_as_run,
@@ -125,9 +127,10 @@ label_of = lambda tid: label_lookup.get(tid, tid)
 nodes = [{"id": tid, "label": label} for tid, label in label_lookup.items()]
 edges = [{"child": e.child_type_id, "parent": e.parent_type_id} for e in hierarchy.edges]
 highlight_ids = list(st.session_state["sandbox_last_moved"] or [])
+seed_ids = list(seed_type_ids(bundle))
 
 result = reparent_tree(
-    nodes, edges, highlight_ids=highlight_ids, height=820,
+    nodes, edges, highlight_ids=highlight_ids, seed_ids=seed_ids, height=820,
     can_undo=bool(st.session_state["sandbox_history"]),
     # Deliberately STABLE across edits (keyed only by which run is loaded,
     # not by an incrementing counter) -- a changing key forces Streamlit to
@@ -238,7 +241,16 @@ else:
         embedder=embedder, similarity_threshold=similarity_threshold,
     )
     if candidates:
-        st.dataframe(pd.DataFrame(candidates)[["entity_a", "entity_b", "similarity", "new_partition_key"]],
+        # new_partition_key is a raw ("self"|"parent", type_id) tuple from
+        # _parent_key -- type_id is frequently a synthesized type_h####/
+        # type_seed#### id absent from type_vocab.items, so it must go
+        # through label_of (same fallback as everywhere else on this page)
+        # rather than being shown as-is.
+        df = pd.DataFrame(candidates)
+        df["shared_group"] = df["new_partition_key"].apply(
+            lambda k: f"same type: {label_of(k[1])}" if k[0] == "self" else f"siblings under: {label_of(k[1])}"
+        )
+        st.dataframe(df[["entity_a", "entity_b", "similarity", "shared_group"]],
                      use_container_width=True, hide_index=True)
     else:
         st.caption(f"No merge candidates above {similarity_threshold:.2f} similarity from this move.")

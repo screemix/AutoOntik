@@ -41,7 +41,7 @@ candidates) turn into 270 synthesized nodes with only 185 distinct labels
 (`abstract concept` minted 20 separate times). Instead, a level is shown to
 a focal node WHOLE, always <= `candidate_batch_size`: the moment it would
 exceed that, `_regroup_level` consolidates it first by grouping true
-siblings under an invented (or, via `_check_collision`, REUSED) shared
+siblings under an invented (or, via `_resolve_or_mint_parent`, REUSED) shared
 parent. Regrouping is a capacity-management response to a structural fact
 (too many candidates to show), not a semantic judgment offered on every
 comparison -- which is also what makes candidate visibility unconditional:
@@ -643,10 +643,10 @@ def _apply_seed_roots(
 
     Every freshly-synthesized seed node (a seed label with no match in T*,
     e.g. a DOLCE category like "Endurant") is also registered in
-    `known_labels`, the same registry `_check_collision` consults before
+    `known_labels`, the same registry `_resolve_or_mint_parent` consults before
     minting a regroup-synthesized abstraction. Without this, a seed-provided
     category is invisible to that check -- exactly the duplicate-abstraction
-    bug `_check_collision` exists to prevent everywhere else, just with the
+    bug `_resolve_or_mint_parent` exists to prevent everywhere else, just with the
     seed ontology on the losing end instead of two independent regroup
     calls.
 
@@ -825,7 +825,7 @@ def _reparent(
 def _embed_inline(
     type_id: str, node: _Node, embedder, embedding_by_id: dict, embed_lock,
 ) -> None:
-    """Embed a node minted by _regroup_level, so a later _check_collision
+    """Embed a node minted by _regroup_level, so a later _resolve_or_mint_parent
     call has an embedding to compare against. `embedding_by_id` is built
     once per band from `pool`, and a regroup-minted node does not exist yet
     at that point. Best-effort -- a failure costs collision-check recall for
@@ -844,52 +844,89 @@ def _embed_inline(
         embedding_by_id[type_id] = vec
 
 
-def _check_collision(
+def _resolve_or_mint_parent(
     label: str,
+    definition: str,
+    all_nodes: dict[str, _Node],
+    synthesized: list[SynthesizedType],
+    synthetic_counter: list[int],
+    counter_lock: threading.Lock,
     known_labels: dict[str, str],
     known_lock: threading.Lock,
     embedding_by_id: dict[str, np.ndarray],
     embedder,
+    embed_lock: threading.Lock,
     threshold: float,
-) -> Optional[str]:
-    """Before minting a synthesized parent, check whether `label` is really
+) -> tuple[str, bool]:
+    """Before minting a synthesized parent, decide whether `label` is really
     the SAME concept as something that already exists -- a real T* type, or
     a label a DIFFERENT regroup call already synthesized elsewhere in this
-    run. Two independent regroup calls have zero visibility into each
-    other's decisions, so this is the only thing standing between them and
-    reinventing the same abstraction twice (measured on MINE: two disjoint
-    batches of biological-ish orphans independently minted 'biological
-    entity' and 'biological concept' for overlapping content).
+    run -- and if not, mint it. Two independent regroup calls have zero
+    visibility into each other's decisions, so this check-and-reserve is the
+    only thing standing between them and reinventing the same abstraction
+    twice (measured on MINE: two disjoint batches of biological-ish orphans
+    independently minted 'biological entity' and 'biological concept' for
+    overlapping content; also 'space mission component'/'space mission
+    element' on run_19).
 
-    Exact normalized-label match first (free, no embedding call). Then an
-    embedding-similarity check against every known label, since exact match
-    alone misses near-miss variants ('biological entity' vs 'biological
-    entity type' for the identical member set, also measured). Returns the
-    existing type_id to reuse, or None if this is genuinely new."""
+    This used to be two separate critical sections -- a lookup under
+    known_lock, released, THEN (after an unlocked embedding computation and
+    comparison) a second acquisition of known_lock to register the mint --
+    which is a classic check-then-act race: two threads proposing the same
+    (or near-identical) label from different anchors could both see "not
+    known yet" and both mint, each registering AFTER the other had already
+    looked. Collapsing decide-and-reserve into ONE critical section closes
+    that window; only the embedding call itself (independent of shared
+    state) stays outside the lock, since minting is rare enough that
+    serializing the rest costs nothing in practice.
+
+    Exact normalized-label match first (free, no embedding call needed to
+    decide). Then an embedding-similarity check against every known label,
+    since exact match alone misses near-miss variants ('biological entity'
+    vs 'biological entity type' for the identical member set, also
+    measured). Returns (type_id, is_newly_minted)."""
     norm = normalize_label(label)
+    candidate_vec = None
+    if embedder is not None:
+        try:
+            candidate_vec = embedder.embed([label], batch_size=1)[0]
+        except Exception:  # noqa: BLE001 -- collision check is best-effort, never blocks minting
+            logger.debug("collision-check embed failed for %r; skipping near-duplicate check", label)
+
     with known_lock:
         existing = known_labels.get(norm)
         if existing is not None:
-            return existing
-        snapshot = dict(known_labels)
+            return existing, False
 
-    if embedder is None or not snapshot:
-        return None
-    try:
-        candidate_vec = embedder.embed([label], batch_size=1)[0]
-    except Exception:  # noqa: BLE001 -- collision check is best-effort, never blocks minting
-        logger.debug("collision-check embed failed for %r; skipping near-duplicate check", label)
-        return None
+        if candidate_vec is not None:
+            with embed_lock:
+                known_ids = [tid for tid in known_labels.values() if tid in embedding_by_id]
+                known_matrix = (
+                    np.stack([embedding_by_id[tid] for tid in known_ids]) if known_ids else None
+                )
+            if known_matrix is not None:
+                sims = 1.0 - cosine_distances(candidate_vec.reshape(1, -1), known_matrix)[0]
+                best_idx = int(np.argmax(sims))
+                if sims[best_idx] >= threshold:
+                    return known_ids[best_idx], False
 
-    known_ids = [tid for tid in snapshot.values() if tid in embedding_by_id]
-    if not known_ids:
-        return None
-    known_matrix = np.stack([embedding_by_id[tid] for tid in known_ids])
-    sims = 1.0 - cosine_distances(candidate_vec.reshape(1, -1), known_matrix)[0]
-    best_idx = int(np.argmax(sims))
-    if sims[best_idx] >= threshold:
-        return known_ids[best_idx]
-    return None
+        # Genuinely new: mint and register before releasing known_lock, so
+        # no concurrently-waiting thread can ever observe "not yet known"
+        # for this label a second time.
+        new_id = _next_synthetic_id("type_h", synthetic_counter, counter_lock)
+        new_node = _Node(type_id=new_id, label=label.strip(), profile={}, is_leaf=False, definition=definition.strip())
+        all_nodes[new_id] = new_node
+        synthesized.append(SynthesizedType(
+            type_id=new_id, canonical_label=label.strip(), definition=definition.strip(), child_type_ids=[],
+        ))
+        known_labels[norm] = new_id
+
+    # Embedding registration only matters for FUTURE collision checks on
+    # labels not yet decided -- it can safely happen after known_lock is
+    # released (embed_lock already serializes embedding_by_id writes on its
+    # own, see _embed_inline).
+    _embed_inline(new_id, new_node, embedder, embedding_by_id, embed_lock)
+    return new_id, True
 
 
 def _regroup_level(
@@ -912,7 +949,7 @@ def _regroup_level(
 ) -> list[str]:
     """Consolidate an overflowing level down to <= config.candidate_batch_size
     by grouping true siblings under an invented (or REUSED -- see
-    _check_collision) shared parent. Every consumed member is reparented
+    _resolve_or_mint_parent) shared parent. Every consumed member is reparented
     under its group's parent, which takes the members' place at this same
     level -- no respawn/re-placement needed, since regroup is only ever
     answering "what capacity-managing structure does THIS level need", not a
@@ -945,24 +982,28 @@ def _regroup_level(
             if not new_label:
                 continue
 
-            existing_id = _check_collision(
-                new_label, known_labels, known_lock, embedding_by_id, embedder,
+            # Decide-and-reserve is ONE atomic step (CLAUDE.md race-condition
+            # fix): two concurrent regroup calls under different anchors
+            # proposing the same (or near-identical) label can no longer
+            # both observe "not yet known" and both mint -- see
+            # _resolve_or_mint_parent's docstring.
+            new_id, is_new = _resolve_or_mint_parent(
+                new_label, str(g.get("definition") or ""),
+                all_nodes, synthesized, synthetic_counter, counter_lock,
+                known_labels, known_lock, embedding_by_id, embedder, embed_lock,
                 config.label_collision_threshold,
             )
-            if existing_id is not None and existing_id in all_nodes:
-                new_id = existing_id
-            else:
-                new_id = None  # decided below, once we know at least one member can safely attach
 
-            # A candidate member that is ALREADY an ancestor of new_id (or,
-            # in the reuse case, literally new_id itself -- e.g. the group's
-            # own proposed label collided with one of its OWN members'
-            # labels) must not be reparented under it: that would loop the
-            # tree back on itself. Measured without this guard: 244
-            # self-loops on a real MINE run.
+            # A candidate member that is ALREADY an ancestor of new_id is
+            # only possible in the REUSE case (a freshly minted node cannot
+            # yet be anyone's ancestor) -- e.g. the group's own proposed
+            # label collided with one of its OWN members' labels. Reparenting
+            # it under its own descendant would loop the tree back on
+            # itself. Measured without this guard: 244 self-loops on a real
+            # MINE run.
             safe_member_ids = [
                 m for m in member_ids
-                if not (new_id is not None and _is_ancestor_or_self(m, new_id, edges))
+                if not (not is_new and _is_ancestor_or_self(m, new_id, edges))
             ]
             dropped = [m for m in member_ids if m not in safe_member_ids]
             if dropped:
@@ -970,28 +1011,17 @@ def _regroup_level(
                     "regroup: dropping member(s) %r from group %r -- would create a cycle",
                     [labels_by_id.get(m, m) for m in dropped], new_label,
                 )
-            if len(safe_member_ids) < 2 and existing_id is None:
-                continue  # nothing safe left to justify minting a brand-new node
+            if len(safe_member_ids) < 2 and not is_new:
+                continue  # nothing safe left to justify reusing this node
             member_ids = safe_member_ids
             if not member_ids:
                 continue
 
-            if new_id is None:
-                new_id = _next_synthetic_id("type_h", synthetic_counter, counter_lock)
-                new_node = _Node(
-                    type_id=new_id, label=new_label, profile={}, is_leaf=False,
-                    definition=str(g.get("definition") or ""),
-                )
-                all_nodes[new_id] = new_node
-                synthesized.append(SynthesizedType(
-                    type_id=new_id, canonical_label=new_label, definition=new_node.definition,
-                    child_type_ids=list(member_ids),
-                ))
-                _embed_inline(new_id, new_node, embedder, embedding_by_id, embed_lock)
-                with known_lock:
-                    known_labels[normalize_label(new_label)] = new_id
+            new_node = all_nodes[new_id]
+            if is_new:
+                synth_record = next(s for s in synthesized if s.type_id == new_id)
+                synth_record.child_type_ids = list(member_ids)
             else:
-                new_node = all_nodes[new_id]
                 logger.info(
                     "regroup: reusing existing label %r (%s) instead of minting a duplicate for %r",
                     new_node.label, new_id, [labels_by_id.get(m, m) for m in member_ids],
@@ -1003,7 +1033,7 @@ def _regroup_level(
                 roots.discard(member_id)
                 consumed.add(member_id)
 
-            if new_id != existing_id:
+            if is_new:
                 if current_anchor is not None:
                     anchor_node = all_nodes[current_anchor]
                     edges.append(_make_edge(new_id, current_anchor, new_node.profile, anchor_node.profile, 0.5))
@@ -1251,7 +1281,7 @@ def induce_hierarchy(
     # Every label currently in play (real T* types + anything synthesized so
     # far this run), normalized -> type_id. The ONLY defense against two
     # independent regroup calls reinventing the same abstraction under
-    # different names -- see _check_collision.
+    # different names -- see _resolve_or_mint_parent.
     known_labels: dict[str, str] = {
         normalize_label(node.label): tid for tid, node in all_nodes.items()
     }

@@ -59,16 +59,6 @@ col3.metric("Hierarchy roots", len(h.hierarchy.roots) if h else "—")
 col4.metric("Entities", len(bundle.entity_vocab.items) if bundle.entity_vocab else "—")
 col5.metric("Constraints", len(bundle.constraints) if bundle.constraints is not None else "—")
 
-st.markdown(f"**Run path:** `{bundle.run_dir}`")
-if bundle.triplets_path:
-    st.markdown(f"**Raw triplets (for the Graph page):** `{bundle.triplets_path}`")
-else:
-    st.warning(
-        "Could not locate this run's raw triplets file (no run_metadata.json, or its "
-        "input_path doesn't exist on disk). The Graph page needs it -- you can still "
-        "browse Hierarchy and Constraints."
-    )
-
 st.divider()
 st.markdown(
     "Use the sidebar to open **Hierarchy**, **Constraints**, or **Graph**. "

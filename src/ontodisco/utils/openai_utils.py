@@ -53,6 +53,8 @@ DEFAULT_SYSTEM_PROMPT_PATHS = {
     "question_entity_extractor": "question_entity_extraction.txt",
     "question_entity_ranker": "question_entity_ranker.txt",
     "qa": "qa_answer.txt",
+    "link_entity_type": "link_entity_type.txt",
+    "link_relation": "link_relation.txt",
 }
 
 
@@ -331,6 +333,59 @@ class LLMTripletExtractor:
             groups = response.get("merged", []) or response.get("split", [])
 
         return groups
+
+    def link_entity_type(self, entity_name: str, sentence: str, candidate_labels: list[str]) -> dict:
+        """Pick which of an existing type vocabulary's candidate labels a
+        freshly-extracted entity mention IS-A, or None if none genuinely
+        fit (see prompts/link_entity_type.txt). Used by ontology-linked,
+        per-sample extraction (scripts/mine_benchmark/ontology_linked_extraction.py)
+        to resolve a raw extracted type onto a PRE-BUILT ontology instead of
+        letting it free-float as a new, never-canonicalized label.
+
+        Returns {"type": <label> or None}. None on any unparseable response
+        or call failure, never raises."""
+        system_prompt = self.prompts["link_entity_type"]
+        user_prompt = (
+            f"Entity: {entity_name}\nSentence: {sentence}\n"
+            f"Candidate types: {', '.join(candidate_labels)}"
+        )
+        try:
+            response = self.get_completion(system_prompt=system_prompt, user_prompt=user_prompt)
+        except Exception:
+            logger.exception("link_entity_type: LLM call failed")
+            return {"type": None}
+        if not isinstance(response, dict):
+            logger.warning("link_entity_type: LLM returned unparseable response")
+            return {"type": None}
+        picked = response.get("type")
+        return {"type": picked if picked in candidate_labels else None}
+
+    def link_relation(
+        self, relation_text: str, subject_label: str, object_label: str,
+        sentence: str, candidate_labels: list[str],
+    ) -> dict:
+        """Pick which of an existing relation vocabulary's candidate labels
+        a freshly-extracted relation means, in the same direction, or None
+        if none genuinely match (see prompts/link_relation.txt). Same
+        provenance/use as link_entity_type, for the relation side.
+
+        Returns {"relation": <label> or None}. None on any unparseable
+        response or call failure, never raises."""
+        system_prompt = self.prompts["link_relation"]
+        user_prompt = (
+            f"Extracted relation: {relation_text}\nSubject: {subject_label}\nObject: {object_label}\n"
+            f"Sentence: {sentence}\nCandidate relations: {', '.join(candidate_labels)}"
+        )
+        try:
+            response = self.get_completion(system_prompt=system_prompt, user_prompt=user_prompt)
+        except Exception:
+            logger.exception("link_relation: LLM call failed")
+            return {"relation": None}
+        if not isinstance(response, dict):
+            logger.warning("link_relation: LLM returned unparseable response")
+            return {"relation": None}
+        picked = response.get("relation")
+        return {"relation": picked if picked in candidate_labels else None}
 
     @staticmethod
     def _render_hierarchy_prompt(focal_label, focal_context, candidate_labels, candidate_context):

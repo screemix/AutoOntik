@@ -26,20 +26,24 @@ def type_tree_selector(
     nodes: list[dict],
     edges: list[dict],
     selected_ids: Optional[list[str]] = None,
+    seed_ids: Optional[list[str]] = None,
     height: int = 600,
     key: Optional[str] = None,
 ) -> list[str]:
     """Renders a collapsible tree (same +/- and zoom/pan as reparent_tree).
     `nodes`: [{"id", "label"}, ...]. `edges`: [{"child", "parent"}, ...].
-    Clicking a node's circle toggles it in the selection; a "Clear
-    selection" control lives in the component's own topbar (an external
-    Streamlit button would need to bump `key` to signal it, which tears
-    down the iframe and wipes zoom/collapse state -- see reparent_tree's
-    own fix for the same issue). Returns the CURRENT full selection as a
-    list of type_ids (never None -- defaults to [] both here and as the
-    component's initial value, so callers don't need a None-check)."""
+    `seed_ids`: type_ids belonging to the run's external seed ontology (see
+    scripts.webapp.lib.data.seed_type_ids) -- rendered in red with a
+    "(seed)" label suffix, same treatment as reparent_tree. Clicking a
+    node's circle toggles it in the selection; a "Clear selection" control
+    lives in the component's own topbar (an external Streamlit button would
+    need to bump `key` to signal it, which tears down the iframe and wipes
+    zoom/collapse state -- see reparent_tree's own fix for the same issue).
+    Returns the CURRENT full selection as a list of type_ids (never None --
+    defaults to [] both here and as the component's initial value, so
+    callers don't need a None-check)."""
     result = _component(
         nodes=nodes, edges=edges, selected_ids=selected_ids or [],
-        height=height, key=key, default=[],
+        seed_ids=seed_ids or [], height=height, key=key, default=[],
     )
     return result if result is not None else []

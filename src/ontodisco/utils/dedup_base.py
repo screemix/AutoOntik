@@ -3,7 +3,7 @@ Shared Deduplication Infrastructure
 ====================================
 
 Base module for surface-form deduplication. Provides:
-  - ContrieverEmbedder — dense embedding via Meta's Contriever
+  - ContrieverEmbedder — dense embedding via Meta's Contriever or ai-forever/FRIDA
   - normalize_label    — Unicode NFKC + lowercase + whitespace collapse
   - cluster_hdbscan    — HDBSCAN-based candidate clustering
   - verify_clusters_with_llm — LLM merge/split verification loop
@@ -27,7 +27,7 @@ from sklearn.metrics.pairwise import cosine_distances
 from tqdm import tqdm
 
 import torch
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer, AutoModel, T5EncoderModel
 import dotenv
 dotenv.load_dotenv()
 import os
@@ -67,16 +67,31 @@ class DeduplicationResult:
 
 class ContrieverEmbedder:
     """
-    Embeds text strings using Meta's Contriever model (facebook/contriever).
+    Embeds text strings for deduplication/clustering.
 
-    Produces 768-dimensional L2-normalised embeddings via mean pooling
-    over the last hidden states (masked for padding).
+    Backend is picked from `model_name`:
+      - Meta's Contriever (default, "facebook/contriever") — mean pooling
+        over the last hidden state, L2-normalised. English-only in practice;
+        Contriever has no meaningful Russian coverage.
+      - ai-forever/FRIDA (`model_name` containing "frida", e.g.
+        "ai-forever/FRIDA") — a T5-encoder model with native Russian support.
+        Uses CLS-token pooling and the "paraphrase: " task prefix (FRIDA's
+        prefix for symmetric similarity, the right choice for surface-form
+        dedup), matching the setup already used for Russian corpora in the
+        sibling Wikontic project.
+
+    Both backends produce L2-normalised embeddings; only the pooling method,
+    prefix, and underlying model class differ.
     """
+
+    _FRIDA_PREFIX = "paraphrase: "
 
     def __init__(self, model_name: str = "facebook/contriever", device: str = None):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device
+        self.model_name = model_name
+        self.is_frida = "frida" in model_name.lower()
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         # Prefer safetensors, but don't make the whole pipeline depend on HF's
@@ -87,14 +102,15 @@ class ContrieverEmbedder:
         # aborting a multi-hour run before the first LLM call. Fall back to the
         # already-cached .bin weights instead.
         load_kwargs = dict(trust_remote_code=True, token=os.getenv("HF_KEY"))
+        model_cls = T5EncoderModel if self.is_frida else AutoModel
         try:
-            self.model = AutoModel.from_pretrained(model_name, use_safetensors=True, **load_kwargs)
+            self.model = model_cls.from_pretrained(model_name, use_safetensors=True, **load_kwargs)
         except Exception as exc:
             logger.warning(
                 "Loading %s with use_safetensors=True failed (%s: %s); retrying without it",
                 model_name, type(exc).__name__, exc,
             )
-            self.model = AutoModel.from_pretrained(model_name, **load_kwargs)
+            self.model = model_cls.from_pretrained(model_name, **load_kwargs)
         self.model = self.model.to(self.device)
         self.model.eval()
         self.api_key = os.getenv("HF_KEY")
@@ -115,6 +131,8 @@ class ContrieverEmbedder:
 
         for i in range(0, len(texts), batch_size):
             batch = texts[i : i + batch_size]
+            if self.is_frida:
+                batch = [self._FRIDA_PREFIX + t for t in batch]
 
             inputs = self.tokenizer(
                 batch,
@@ -125,7 +143,10 @@ class ContrieverEmbedder:
             ).to(self.device)
 
             outputs = self.model(**inputs)
-            embeddings = self._mean_pool(outputs.last_hidden_state, inputs["attention_mask"])
+            if self.is_frida:
+                embeddings = outputs.last_hidden_state[:, 0]
+            else:
+                embeddings = self._mean_pool(outputs.last_hidden_state, inputs["attention_mask"])
             embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
             all_embeddings.append(embeddings.cpu().numpy())
 

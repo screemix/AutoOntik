@@ -379,3 +379,114 @@ def test_round_based_convergence_stops_without_extra_llm_calls_once_stable():
     # any later round) must never fire once "ab" vs "c" both come back as
     # all-singleton clusters.
     assert llm.calls == [["a", "b"]]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  ContrieverEmbedder: backend selection (Contriever vs. FRIDA)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# No real model download -- AutoTokenizer/AutoModel/T5EncoderModel are patched
+# with fakes so these pin only the branching logic (which model class gets
+# loaded, whether the "paraphrase: " prefix is applied, CLS vs. mean pooling),
+# not anything about the real Contriever or FRIDA weights.
+
+from collections import namedtuple
+from unittest.mock import patch
+
+import torch
+
+from src.ontodisco.utils.dedup_base import ContrieverEmbedder
+
+_FakeModelOutput = namedtuple("_FakeModelOutput", ["last_hidden_state"])
+
+
+class _FakeBatchEncoding(dict):
+    """Stands in for transformers' BatchEncoding -- a dict with a `.to(device)`."""
+    def to(self, device):
+        return self
+
+
+class _FakeTokenizer:
+    def __init__(self, *args, **kwargs):
+        self.calls: list[list[str]] = []
+
+    def __call__(self, texts, **kwargs):
+        self.calls.append(list(texts))
+        batch, seq_len = len(texts), 3
+        return _FakeBatchEncoding(
+            input_ids=torch.ones(batch, seq_len, dtype=torch.long),
+            attention_mask=torch.ones(batch, seq_len, dtype=torch.long),
+        )
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        return cls()
+
+
+class _FakeHFModel:
+    """Returns a deterministic, position-distinguishable hidden state so
+    CLS-pooling (position 0) and mean-pooling are numerically distinguishable."""
+    hidden_dim = 4
+    seq_len = 3
+
+    def __init__(self, *args, **kwargs):
+        self.forward_calls: list[dict] = []
+
+    def eval(self):
+        return self
+
+    def to(self, device):
+        return self
+
+    def __call__(self, **kwargs):
+        self.forward_calls.append(kwargs)
+        batch = kwargs["input_ids"].shape[0]
+        hidden = torch.arange(batch * self.seq_len * self.hidden_dim, dtype=torch.float32)
+        return _FakeModelOutput(last_hidden_state=hidden.reshape(batch, self.seq_len, self.hidden_dim))
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        return cls()
+
+
+def _patched_embedder(model_name):
+    with patch("src.ontodisco.utils.dedup_base.AutoTokenizer", _FakeTokenizer), \
+         patch("src.ontodisco.utils.dedup_base.AutoModel", _FakeHFModel), \
+         patch("src.ontodisco.utils.dedup_base.T5EncoderModel", _FakeHFModel):
+        return ContrieverEmbedder(model_name=model_name, device="cpu")
+
+
+def test_frida_model_name_is_detected_case_insensitively():
+    assert _patched_embedder("ai-forever/FRIDA").is_frida is True
+    assert _patched_embedder("some/FriDa-variant").is_frida is True
+    assert _patched_embedder("facebook/contriever").is_frida is False
+
+
+def test_frida_backend_prefixes_text_and_uses_cls_pooling():
+    embedder = _patched_embedder("ai-forever/FRIDA")
+    vectors = embedder.embed(["hello", "mir"])
+
+    # every text sent to the tokenizer must carry FRIDA's symmetric-similarity prefix
+    assert embedder.tokenizer.calls == [["paraphrase: hello", "paraphrase: mir"]]
+
+    # CLS pooling = the model's own position-0 hidden vector, L2-normalised
+    expected_cls = torch.nn.functional.normalize(
+        torch.tensor([0.0, 1.0, 2.0, 3.0]).unsqueeze(0), p=2, dim=1
+    ).numpy()
+    np.testing.assert_allclose(vectors[0], expected_cls[0], atol=1e-6)
+
+
+def test_contriever_backend_does_not_prefix_and_uses_mean_pooling():
+    embedder = _patched_embedder("facebook/contriever")
+    vectors = embedder.embed(["hello", "mir"])
+
+    # Contriever gets the raw text, no task prefix
+    assert embedder.tokenizer.calls == [["hello", "mir"]]
+
+    # mean pooling over the 3 (unmasked) positions, L2-normalised
+    expected_mean = torch.nn.functional.normalize(
+        torch.tensor([[0.0, 1.0, 2.0, 3.0], [4.0, 5.0, 6.0, 7.0], [8.0, 9.0, 10.0, 11.0]])
+        .mean(dim=0, keepdim=True),
+        p=2, dim=1,
+    ).numpy()
+    np.testing.assert_allclose(vectors[0], expected_mean[0], atol=1e-6)

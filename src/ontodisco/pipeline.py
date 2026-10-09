@@ -238,6 +238,50 @@ def load_seed_roots(path: str | Path) -> list:
     raise ValueError(f"Seed roots file {path!r} must contain a list or a 'seed_roots:' mapping")
 
 
+def flatten_seed_labels(seed_roots: list) -> set[str]:
+    """Every label appearing anywhere in a seed_roots tree (root or nested
+    child), normalized. This is the only reliable way to recognize a "seed
+    node" downstream: hierarchy_induction._reparent drops any is_seed
+    marker when a seed node is later reparented (a real, observed outcome --
+    see CLAUDE.md's known limitation on pinned roots), and a seed label that
+    matched an existing T* type never enters hierarchy_result.synthesized_types
+    at all. Label text survives both cases, since it's never rewritten."""
+    labels: set[str] = set()
+
+    def _walk(items: list) -> None:
+        for item in items:
+            if isinstance(item, str):
+                labels.add(normalize_label(item))
+            elif isinstance(item, dict):
+                label = item.get("label")
+                if label:
+                    labels.add(normalize_label(label))
+                _walk(item.get("children") or [])
+
+    _walk(seed_roots or [])
+    return labels
+
+
+def load_seed_labels_for_run(run_dir: str | Path) -> set[str]:
+    """Normalized seed-ontology labels for an already-completed run, read
+    from its frozen run_metadata.json config dump rather than the live
+    configs/seeds/*.yaml file (which may have moved, changed, or been
+    deleted since that run finished -- run_metadata.json's config.hierarchy.
+    seed_roots is always the fully-resolved tree the run actually used, per
+    run_pipeline()'s own seed-resolution-before-metadata-write ordering).
+    Empty set if the run wasn't seeded, or run_metadata.json is missing or
+    unreadable."""
+    meta_path = Path(run_dir) / "run_metadata.json"
+    if not meta_path.exists():
+        return set()
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    seed_roots = (meta.get("config") or {}).get("hierarchy", {}).get("seed_roots") or []
+    return flatten_seed_labels(seed_roots)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Checkpointing
 # ═══════════════════════════════════════════════════════════════════════════════

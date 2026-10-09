@@ -59,26 +59,33 @@ def _load_checkpoint(run_dir: Path, name: str):
         return pickle.load(f)
 
 
-def _build_label_lookup(type_vocab, hierarchy_result):
-    labels, counts, surface_forms, definitions, is_synth = {}, {}, {}, {}, {}
+def _build_label_lookup(type_vocab, hierarchy_result, seed_labels: set[str] | None = None):
+    from src.ontodisco.utils.dedup_base import normalize_label
+
+    seed_labels = seed_labels or set()
+    labels, counts, surface_forms, definitions, is_synth, is_seed = {}, {}, {}, {}, {}, {}
     for type_id, ct in type_vocab.items.items():
         labels[type_id] = ct.canonical_label
         counts[type_id] = ct.count_per_normalized
         surface_forms[type_id] = ct.surface_forms
         definitions[type_id] = ""
         is_synth[type_id] = False
+        is_seed[type_id] = normalize_label(ct.canonical_label) in seed_labels
     for st in hierarchy_result.synthesized_types:
         labels[st.type_id] = st.canonical_label
         counts[st.type_id] = 0
         surface_forms[st.type_id] = []
         definitions[st.type_id] = st.definition
         is_synth[st.type_id] = True
-    return labels, counts, surface_forms, definitions, is_synth
+        is_seed[st.type_id] = normalize_label(st.canonical_label) in seed_labels
+    return labels, counts, surface_forms, definitions, is_synth, is_seed
 
 
-def build_tree(hierarchy_result, type_vocab) -> list[dict]:
+def build_tree(hierarchy_result, type_vocab, seed_labels: set[str] | None = None) -> list[dict]:
     hierarchy = hierarchy_result.hierarchy
-    labels, counts, surface_forms, definitions, is_synth = _build_label_lookup(type_vocab, hierarchy_result)
+    labels, counts, surface_forms, definitions, is_synth, is_seed = _build_label_lookup(
+        type_vocab, hierarchy_result, seed_labels,
+    )
     edge_by_child = {e.child_type_id: e for e in hierarchy.edges}
 
     def build_node(type_id: str, visited: frozenset[str]) -> dict:
@@ -86,7 +93,7 @@ def build_tree(hierarchy_result, type_vocab) -> list[dict]:
             # Defensive only -- the forest is acyclic by construction; guards
             # against silently hanging if a checkpoint is ever malformed.
             return {"id": type_id, "label": f"[cycle: {labels.get(type_id, type_id)}]",
-                    "synth": False, "definition": "", "surface": [], "count": 0,
+                    "synth": False, "seed": False, "definition": "", "surface": [], "count": 0,
                     "leafCount": 1, "score": None, "children": []}
         child_ids = hierarchy.children.get(type_id, [])
         children = [build_node(c, visited | {type_id}) for c in child_ids]
@@ -99,6 +106,7 @@ def build_tree(hierarchy_result, type_vocab) -> list[dict]:
             "id": type_id,
             "label": labels.get(type_id, type_id),
             "synth": is_synth.get(type_id, False),
+            "seed": is_seed.get(type_id, False),
             "definition": definitions.get(type_id, ""),
             "surface": [s for s in surface_forms.get(type_id, []) if s != labels.get(type_id)][:8],
             "count": total_count,
@@ -122,11 +130,13 @@ HTML_TEMPLATE = """<!doctype html>
     color-scheme: light dark;
     --bg: #ffffff; --fg: #1b1f24; --muted: #6b7280; --border: #e5e7eb;
     --hl: #fff3b0; --synth: #7c3aed; --synth-bg: #f3ecff;
+    --seed: #c62828; --seed-bg: #fdecea;
     --leaf-bg: #f6f7f9; --accent: #2563eb;
   }
   @media (prefers-color-scheme: dark) {
     :root { --bg: #14171a; --fg: #e7e9ea; --muted: #9aa4af; --border: #2a2f35;
-             --hl: #5a4a00; --synth: #b795f7; --synth-bg: #241a38; --leaf-bg: #1b1f24; --accent: #6ea8fe; }
+             --hl: #5a4a00; --synth: #b795f7; --synth-bg: #241a38;
+             --seed: #f28b82; --seed-bg: #3a1f1d; --leaf-bg: #1b1f24; --accent: #6ea8fe; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -156,7 +166,9 @@ HTML_TEMPLATE = """<!doctype html>
   .badge { font-size: 10.5px; color: var(--muted); border: 1px solid var(--border); border-radius: 8px;
            padding: 0px 6px; white-space: nowrap; }
   .badge.synth { color: var(--synth); border-color: var(--synth); background: var(--synth-bg); }
+  .badge.seed { color: var(--seed); border-color: var(--seed); background: var(--seed-bg); }
   .badge.score { color: var(--accent); }
+  .row.seed .lbl { color: var(--seed); font-weight: 600; }
   .def { font-size: 12px; color: var(--muted); font-style: italic; padding-left: 20px; }
   .surf { font-size: 11.5px; color: var(--muted); padding-left: 20px; }
   ul.children { display: none; }
@@ -223,7 +235,14 @@ function renderNode(node, depth) {
   lbl.textContent = node.label;
   row.appendChild(lbl);
 
-  if (node.synth) {
+  if (node.seed) {
+    row.classList.add('seed');
+    const b = document.createElement('span');
+    b.className = 'badge seed';
+    b.title = 'Came from the external seed ontology this run was seeded with';
+    b.textContent = 'Seed node';
+    row.appendChild(b);
+  } else if (node.synth) {
     const b = document.createElement('span');
     b.className = 'badge synth';
     b.textContent = 'synthesized';
@@ -359,7 +378,10 @@ def main() -> None:
     type_vocab = _load_checkpoint(run_dir, "type_dedup")
     hierarchy_result = _load_checkpoint(run_dir, "hierarchy_induction")
 
-    tree = build_tree(hierarchy_result, type_vocab)
+    from src.ontodisco.pipeline import load_seed_labels_for_run
+    seed_labels = load_seed_labels_for_run(run_dir)
+
+    tree = build_tree(hierarchy_result, type_vocab, seed_labels)
     out_path.write_text(render_html(tree), encoding="utf-8")
     print(f"Wrote {out_path} ({len(tree)} roots, from {run_dir}, open it directly in a browser)")
 

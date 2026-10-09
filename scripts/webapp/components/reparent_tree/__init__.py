@@ -23,6 +23,7 @@ def reparent_tree(
     nodes: list[dict],
     edges: list[dict],
     highlight_ids: Optional[list[str]] = None,
+    seed_ids: Optional[list[str]] = None,
     height: int = 600,
     can_undo: bool = False,
     key: Optional[str] = None,
@@ -31,11 +32,15 @@ def reparent_tree(
     top-right corner (`can_undo` also disables them client-side, mirroring
     whatever gate the caller applies to its own Undo/Reset logic). `nodes`:
     [{"id", "label", "depth"}, ...]. `edges`: [{"child", "parent"}, ...].
+    `seed_ids`: type_ids belonging to the run's external seed ontology (see
+    scripts.webapp.lib.data.seed_type_ids) -- rendered in red with a
+    "(seed)" label suffix, distinct from the ordinary root/internal/leaf
+    coloring.
     Returns one of, until the next distinct action (per Streamlit's normal
     component-value semantics), else None:
       {"moved": id, "new_parent": id}  -- a completed reparent
       {"action": "undo"} / {"action": "reset"}"""
     return _component(
         nodes=nodes, edges=edges, highlight_ids=highlight_ids or [],
-        height=height, can_undo=can_undo, key=key, default=None,
+        seed_ids=seed_ids or [], height=height, can_undo=can_undo, key=key, default=None,
     )

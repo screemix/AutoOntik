@@ -16,6 +16,12 @@
   .node.root circle { fill: #4C72B0; stroke: #2f4d78; }
   .node.internal circle { fill: #DD8452; stroke: #a4602f; }
   .node.leaf circle { fill: #55A868; stroke: #327142; }
+  /* Comes after root/internal/leaf (wins the fill on equal specificity) but
+     before .selected, so a seed node keeps its red fill even when selected --
+     .selected's stroke still overrides on top of it, so selection stays
+     visible as a blue ring around a red-filled node. */
+  .node circle.seed { fill: #c62828; stroke: #7f1d1d; }
+  .node text.seed-label { fill: #c62828; font-weight: 600; }
   .node circle.selected { stroke: #1565c0; stroke-width: 4px; }
   .node circle.has-hidden-children { stroke-dasharray: 2,2; }
   .toggle { cursor: pointer; }
@@ -130,6 +136,7 @@ document.getElementById("clear-btn").addEventListener("click", () => {
 function render(args) {
   const nodesIn = args.nodes || [];
   const edgesIn = args.edges || [];
+  const seedIds = new Set(args.seed_ids || []);
   const topbarHeight = document.getElementById("topbar").offsetHeight;
   const height = (args.height || 600) - topbarHeight;
 
@@ -225,13 +232,15 @@ function render(args) {
 
   nodeSel.append("circle").attr("r", 6)
     .classed("has-hidden-children", d => hasRealChildren(d.id) && collapsedIds.has(d.id))
-    .classed("selected", d => selectedIds.has(d.id));
+    .classed("selected", d => selectedIds.has(d.id))
+    .classed("seed", d => seedIds.has(d.id));
   nodeSel.append("text")
     .attr("dy", "0.32em")
     .attr("x", d => (hasRealChildren(d.id) ? -9 : 9))
     .attr("text-anchor", d => (hasRealChildren(d.id) ? "end" : "start"))
-    .text(d => d.data.label + (collapsedIds.has(d.id) && hasRealChildren(d.id)
-      ? ` (+${countDescendants(d.id)})` : ""));
+    .classed("seed-label", d => seedIds.has(d.id))
+    .text(d => d.data.label + (seedIds.has(d.id) ? " (seed)" : "")
+      + (collapsedIds.has(d.id) && hasRealChildren(d.id) ? ` (+${countDescendants(d.id)})` : ""));
 
   function countDescendants(id) {
     let count = 0;

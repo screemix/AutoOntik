@@ -13,7 +13,7 @@ from __future__ import annotations
 import threading
 
 from src.ontodisco.hierarchy_induction import (
-    HierarchyEdge, SynthesizedType, _Node, _apply_seed_roots, _check_collision, _node_context,
+    HierarchyEdge, SynthesizedType, _Node, _apply_seed_roots, _node_context, _resolve_or_mint_parent,
 )
 
 
@@ -169,15 +169,16 @@ def test_node_context_combines_definition_with_examples_and_subclasses():
 def test_synthesized_seed_label_is_visible_to_collision_detection():
     """Regression test: a seed label with no match in T* (e.g. DOLCE's
     'Endurant', which won't appear verbatim in a corpus) must be registered
-    in known_labels -- the same registry _check_collision consults before
-    _regroup_level mints a new abstraction. Before this fix, seed-synthesized
-    labels were invisible to that check, so later placement could mint a
-    second, duplicate node for the same concept instead of reusing the
-    seed-provided one."""
+    in known_labels -- the same registry _resolve_or_mint_parent consults
+    before _regroup_level mints a new abstraction. Before this fix,
+    seed-synthesized labels were invisible to that check, so later placement
+    could mint a second, duplicate node for the same concept instead of
+    reusing the seed-provided one."""
     pool: dict[str, _Node] = {}
     all_nodes: dict[str, _Node] = {}
     edges: list[HierarchyEdge] = []
     known_labels: dict[str, str] = {}
+    synthesized: list[SynthesizedType] = []
 
     pinned_roots = _seed(["Endurant"], pool, all_nodes, edges, known_labels=known_labels)
     (endurant_id,) = pinned_roots
@@ -185,13 +186,16 @@ def test_synthesized_seed_label_is_visible_to_collision_detection():
     assert "endurant" in known_labels
     assert known_labels["endurant"] == endurant_id
 
-    # _check_collision must find it via the free exact-match path (no
-    # embedder call needed) and report it as the type to reuse.
-    reused_id = _check_collision(
-        "Endurant", known_labels, threading.Lock(),
-        embedding_by_id={}, embedder=None, threshold=0.9,
+    # _resolve_or_mint_parent must find it via the free exact-match path (no
+    # embedder call needed) and report it as the type to reuse, rather than
+    # minting a second node for the same concept.
+    reused_id, is_new = _resolve_or_mint_parent(
+        "Endurant", "", all_nodes, synthesized, [0], threading.Lock(),
+        known_labels, threading.Lock(), {}, None, threading.Lock(), 0.9,
     )
     assert reused_id == endurant_id
+    assert is_new is False
+    assert synthesized == []  # reuse must not mint anything
 
 
 def test_synthesized_seed_labels_are_recorded_in_synthesized_types():

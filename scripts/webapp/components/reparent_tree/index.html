@@ -32,6 +32,13 @@
   .node.synthetic-root circle { fill: #cccccc; r: 3; }
   .node circle.selected-source { stroke: #1565c0; stroke-width: 4px; stroke-dasharray: 3,2; }
   .node circle.has-hidden-children { stroke-dasharray: 2,2; }
+  /* Seed-node coloring comes last so it wins over root/internal/leaf on equal
+     CSS specificity -- a seed node's structural role (root/internal/leaf)
+     still determines its position in the tree, but its provenance (came
+     from the external seed ontology, not discovered from the corpus) is
+     what this color communicates, so it takes visual priority. */
+  .node circle.seed { fill: #c62828; stroke: #7f1d1d; }
+  .node text.seed-label { fill: #c62828; font-weight: 600; }
   .toggle { cursor: pointer; }
   .toggle rect { fill: #fff; stroke: #888; stroke-width: 1px; }
   .toggle text { font-size: 10px; fill: #444; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
@@ -158,6 +165,7 @@ function render(args) {
   const nodesIn = args.nodes || [];
   const edgesIn = args.edges || [];
   const highlight = new Set(args.highlight_ids || []);
+  const seedIds = new Set(args.seed_ids || []);
   const topbarHeight = document.getElementById("topbar").offsetHeight;
   const height = (args.height || 600) - topbarHeight;
 
@@ -293,13 +301,15 @@ function render(args) {
     .attr("transform", d => `translate(${d.y},${d.x})`);
 
   nodeSel.append("circle").attr("r", 6)
-    .classed("has-hidden-children", d => hasRealChildren(d.id) && collapsedIds.has(d.id));
+    .classed("has-hidden-children", d => hasRealChildren(d.id) && collapsedIds.has(d.id))
+    .classed("seed", d => seedIds.has(d.id));
   nodeSel.append("text")
     .attr("dy", "0.32em")
     .attr("x", d => (hasRealChildren(d.id) ? -9 : 9))
     .attr("text-anchor", d => (hasRealChildren(d.id) ? "end" : "start"))
-    .text(d => d.data.label + (collapsedIds.has(d.id) && hasRealChildren(d.id)
-      ? ` (+${countDescendants(d.id)})` : ""));
+    .classed("seed-label", d => seedIds.has(d.id))
+    .text(d => d.data.label + (seedIds.has(d.id) ? " (seed)" : "")
+      + (collapsedIds.has(d.id) && hasRealChildren(d.id) ? ` (+${countDescendants(d.id)})` : ""));
 
   function countDescendants(id) {
     let count = 0;
