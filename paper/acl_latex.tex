@@ -185,9 +185,9 @@ where $s$ -- subject entity, $t_s$ -- subject type, $r$ -- relation predicate, $
 
 The pipeline runs ordered stages, described in
 \S\ref{sec:relation-dedup}--\S\ref{sec:constraints}:  \emph{(1) Initial typed triplet extraction}, \emph{(2) relation
-canonicalization}, \emph{(2) entity-type canonicalization}, which also
+canonicalization}, \emph{(3) entity-type canonicalization}, which also
 induces a taxonomy hierarchy over the resulting type vocabulary,
-\emph{(3) entity class assignment and canonicalization}, and \emph{(4)
+\emph{(4) entity class assignment and canonicalization}, and \emph{(5)
 domain/range constraint induction}. The ordering is dictated by data
 dependencies. Entity-type canonicalization is conditioned on the canonical relation vocabulary as a disambiguating signal. Entity deduplication runs after the type hierarchy because it uses the hierarchy as a symbolic gate for candidate synonyms. Constraint induction derives relation constraints directly from the extracted triplets and the outputs of the first two stages.
 
@@ -747,7 +747,6 @@ $C_t$ & Cluster-size split/stitch cap & 40 \\
 $\tau$ & Weeds-precision containment threshold & 0.75 \\
 $\delta$ & Priority-band tolerance (in-degree units) & 10 \\
 $B$ & Candidate batch size & 30 \\
-$E$ & Escalation-batch cap & 3 \\
 $D_{\max}$ & Maximum placement depth & 50 \\
 -- & Relation-argument weighting scheme & PPMI \\
 \addlinespace
@@ -895,8 +894,8 @@ gpt-oss-120b   & 70.3 & 20.8 \\
 \label{sec:appendix-prompts}
 
 This appendix lists, verbatim, the system prompt template behind each of
-the six LLM calls the orchestrated pipeline makes (as shipped in
-\texttt{src/ontodisco/utils/prompts/}). 
+the eight LLM calls the orchestrated pipeline makes (as shipped in
+\texttt{src/ontodisco/utils/prompts/}).
 
 \subsection{Typed Triplet Extraction}
 \label{sec:appendix-extraction}
@@ -1039,7 +1038,7 @@ all the same context relations. For example: "documentary film" is a kind of
 "film" -> split, never merge, regardless of how similar their contexts look.
 "movie" and "film" are just two names for the same thing, with no "kind of"
 relationship between them -> merge. Heavy context/relation overlap is expected
-and NORMAL for a specific type and its generentitled pe (a documentary film
+and NORMAL for a specific type and its general type (a documentary film
 participates in almost every relation "film" does) -- it is NOT by itself
 evidence for merging; the "kind of" test always takes priority over context
 similarity. When genuinely unsure whether two labels are identical or in a
@@ -1059,65 +1058,98 @@ If splitting into multiple types:
 {"decision": "split", "groups": [{"canonical_label": "...", "members": ["...", ...]}, ...]}"""
 \end{lstlisting}
 
-\subsection{Hierarchy Placement (Pairwise Action)}
+\subsection{Hierarchy Placement (Parent/Child Checks and Sibling Regrouping)}
 \label{sec:appendix-hierarchy-pairwise}
-Used by hierarchy induction (\S\ref{sec:hierarchy-induction}) to resolve how one focal type relates to a batch of similarity-ranked candidates -- the four-way decision (\emph{parent}, \emph{child}, \emph{same\_concept}, \emph{same\_class}) plus \emph{none} described in \S\ref{sec:hierarchy-induction}.
+Used by hierarchy induction (\S\ref{sec:hierarchy-induction}) to resolve how one focal type relates to the candidates at its current level. Rather than one combined prompt offering a parent/child/synonym/sibling/none choice, the decision is decomposed into two single-purpose calls -- a parent check, and (only if that finds nothing) a child check -- plus a separate sibling-regrouping call issued only when a level exceeds the candidate batch size $B$ (\S\ref{sec:hierarchy-induction}).
 
-\begin{lstlisting}[caption={System prompt for per-node hierarchy placement decisions.}, label={lst:hierarchy-pairwise}]
-You are an ontology engineer. You are given ONE new/focal type and a short list of
-EXISTING candidate types. Decide how the focal type relates to AT MOST ONE of the
-candidates -- if none of them relate to it in a meaningful hierarchical way, say so.
+\begin{lstlisting}[caption={System prompt for the parent check: does the focal type belong under one of the candidates?}, label={lst:hierarchy-parent-check}]
+You are an ontology engineer. You are given ONE focal type and a list of
+EXISTING candidate types that sit at the same level.
 
-Some types are annotated with "(context: ...)", listing the canonical relations they
-most often participate in -- use this as evidence, not as ground truth.
+Decide if ANY ONE candidate is a more general category that the focal type
+IS-A -- i.e. "every <focal> is a kind of <candidate>" is literally true. This
+is the ONLY question. Do not consider whether focal is a parent of any
+candidate -- that is asked separately, in a different call.
 
-IMPORTANT: candidates (and the focal type) may themselves be abstractions formed
-earlier in this same process (not raw corpus surface forms) -- treat them exactly
-like any other candidate.
+These are NOT "is-a", no matter how strongly associated the two are:
+- focal happens DURING / emerged in / belongs to the era of the candidate
+- focal is PART OF, made of, or located in the candidate
+- focal is CAUSED BY, produced by, used by, or studied by the candidate
+- focal is merely a related topic, or co-occurs with the candidate
 
-Choose EXACTLY ONE of these five relations:
+If a candidate is not just a broader category but the SAME concept as focal
+(a true synonym, e.g. "vehicle" / "means of transport"), say so explicitly --
+that is a merge, not a parent relationship.
 
-1. "parent" -- ONE candidate is a more general type that subsumes the focal type
-   (focal type IS-A candidate). Name that one candidate.
-2. "child" -- the focal type is a more general type that subsumes ONE OR MORE of
-   the candidates (each named candidate IS-A focal type). Use this when the focal
-   type should become the parent of one or more of the listed candidates. If more
-   than one candidate belongs under the focal type, name ALL of them together in
-   this single response -- do not report only one and rely on a later call to
-   catch the rest, since a later call may never re-examine this same candidate.
-3. "same_concept" -- the focal type and ONE candidate are the IDENTICAL concept,
-   just worded differently (e.g. "vehicle" / "means of transport"). Not a
-   hierarchy relationship -- they should be merged into one. Name that one
-   candidate.
-4. "same_class" -- the focal type and ONE candidate are neither parent, child,
-   nor identical, but they are plausible SIBLINGS that should share a new,
-   currently-nonexistent parent (e.g. "war film" and "action film" both being
-   kinds of film genre). Invent a short canonical label and a one-sentence
-   definition for that new shared parent. Name that one candidate.
-5. "none" -- none of the candidates have any of the above relations to the focal
-   type.
+Some types carry "(context: ...)" -- real corpus examples of that type, and
+sometimes a few of its own known subclasses. Use this as evidence for what
+KIND of thing the type actually is; a type with almost no examples is weak
+evidence and you should prefer answering null over guessing.
 
-RULES:
-- Pick the single BEST-fitting relation, if any -- do not force a relation onto a
-  candidate that's merely superficially similar.
-- For every relation except "child", use "candidate": a single label string
-  naming which ONE candidate it applies to (omitted/ignored for "none").
-- For "child" ONLY, use "candidates": a JSON list of label strings, even if only
-  one candidate applies -- e.g. "candidates": ["biographical film"] for one,
-  "candidates": ["biographical film", "war film"] for two.
-- "confidence" is a plain JSON number between 0.0 and 1.0 (e.g. 0.9, 0.75, 1, 0) --
-  NEVER a word ("high"), a spelled-out number ("zero point nine"), or a fraction
-  ("9/10").
-- Only "same_class" needs "new_parent_label"/"new_parent_definition" -- omit them
-  for every other relation.
+Return ONLY JSON:
+{"parent": "<candidate label>" or null, "same_concept": true or false, "confidence": <0.0-1.0>}
 
-Return ONLY valid JSON (no explanation, no markdown), using one of these formats:
-{"relation": "parent", "candidate": "film", "confidence": 0.9}
-{"relation": "child", "candidates": ["biographical film"], "confidence": 0.85}
-{"relation": "child", "candidates": ["biographical film", "war film"], "confidence": 0.85}
-{"relation": "same_concept", "candidate": "motion picture", "confidence": 0.9}
-{"relation": "same_class", "candidate": "action film", "new_parent_label": "genre film", "new_parent_definition": "A film classified primarily by its genre or style.", "confidence": 0.8}
-{"relation": "none", "confidence": 0.0}
+"same_concept" is only ever true when "parent" is non-null and they are the
+identical concept, not merely related by generality.
+\end{lstlisting}
+
+\begin{lstlisting}[caption={System prompt for the child check: does the focal type subsume one or more candidates? Only asked if the parent check found nothing.}, label={lst:hierarchy-child-check}]
+You are an ontology engineer. You are given ONE focal type and a list of
+EXISTING candidate types that sit at the same level.
+
+Decide which candidates, if any, the focal type is a more general category
+OVER -- i.e. "every <candidate> is a kind of <focal>" is literally true for
+that candidate. Apply this test to EACH candidate SEPARATELY.
+
+These are NOT "is-a", no matter how strongly associated the two are:
+- the candidate happens DURING / emerged in / belongs to the era of focal
+- the candidate is PART OF, made of, or located in focal
+- the candidate is CAUSED BY, produced by, used by, or studied by focal
+- the candidate is merely a related topic, or co-occurs with focal
+
+Genuine multi-candidate cases are real but usually small -- two or three
+closely related candidates ("war film" and "action film" under "film
+genre"). If you find yourself naming most of the list, you are answering a
+looser question ("which of these relate to focal?") instead of this one --
+stop, and re-apply the test to each candidate on its own.
+
+Some types carry "(context: ...)" -- real corpus examples of that type, and
+sometimes a few of its own known subclasses. Use this as evidence for what
+KIND of thing the type actually is; a type with almost no examples is weak
+evidence, and claiming it as a child on that basis alone is not warranted.
+
+Return ONLY JSON:
+{"children": ["<label>", ...], "confidence": <0.0-1.0>}
+
+Empty list if none qualify. confidence applies to the set as a whole.
+\end{lstlisting}
+
+\begin{lstlisting}[caption={System prompt for sibling regrouping, issued only when a level's candidate count exceeds $B$.}, label={lst:hierarchy-regroup}]
+You are an ontology engineer. You are given a list of types that all sit at
+the SAME level -- none is a parent of another -- but there are too many to
+compare one at a time, so you must group them first.
+
+For each group of 2 or more types that plausibly share a common, currently
+NONEXISTENT parent category (true siblings -- e.g. "war film" and "action
+film" both being kinds of film genre), invent ONE short canonical label and a
+one-sentence definition for that shared parent.
+
+Rules:
+- Only group true SIBLINGS -- same level of abstraction, same kind of thing.
+  Do not group merely-related types, and do not group a general type with a
+  specific one (that is a parent/child relationship, not a sibling group --
+  leave both out of any group).
+- A type may appear in AT MOST ONE group.
+- Any type that does not clearly belong in a group: leave it out entirely.
+  Precision matters more than coverage -- when in doubt, leave it out.
+- Before inventing a label, check whether an existing, more general word
+  already used elsewhere would describe the group just as well. If so,
+  prefer reusing a short, ordinary word over a novel compound.
+
+Return ONLY JSON:
+{"groups": [{"label": "...", "definition": "...", "members": ["<exact input label>", ...]}, ...]}
+
+Empty list if nothing groups. Every member list must have length >= 2.
 \end{lstlisting}
 
 \subsection{Entity-Name Cluster Verification}
@@ -1125,21 +1157,34 @@ Return ONLY valid JSON (no explanation, no markdown), using one of these formats
 Used during entity deduplication (\S\ref{sec:entity-dedup}) to adjudicate a merge/split decision for one candidate cluster of compound \texttt{name~[type]} entity mentions, within one parent-gated partition.
 
 \begin{lstlisting}[caption={System prompt for entity-name cluster merge/split verification.}, label={lst:cluster-entity-names}]
-You are a knowledge graph engineer. Below is a group of entity mentions, each in the format "name [type]". These have been clustered together based on embedding similarity.
+You are a knowledge graph engineer. Below is a group of entity mentions, each in the format "name [type]". These were clustered together by embedding similarity ONLY -- being in this list is NOT evidence that they are the same entity. Most clusters contain several DIFFERENT entities that merely sound alike or share a type.
 
 Your task:
-1. Decide which mentions refer to the SAME real-world entity.
-2. Group mentions of the same entity together.
-3. For each group, choose the BEST canonical name -- the most complete, unambiguous form of the entity name. The canonical name must be JUST the entity name, WITHOUT the [type] bracket.
+1. Decide which mentions are SYNONYMOUS: different ways of writing the SAME single real-world entity.
+2. Group synonymous entities together. A mention with no synonym forms its own group of one.
+3. For each group, choose the BEST canonical name -- the most complete, unambiguous form of that entity's name, taken from the mentions themselves. The canonical name must be JUST the entity name, WITHOUT the [type] bracket.
 4. Each group's "members" array must contain the EXACT compound strings as provided (including the [type] part).
 
-IMPORTANT RULES:
-- Two mentions with DIFFERENT types usually refer to DIFFERENT entities (e.g., "Paris [city]" vs "Paris [person]" are two different entities).
-- Two mentions with SIMILAR types may refer to the same entity (e.g., "Christopher Nolan [film director]" and "Chris Nolan [filmmaker]" are the same person).
-- Abbreviations, nicknames, and partial names should be merged with their full form ONLY if the type context supports it.
-- When in doubt, keep entities SEPARATE (prefer precision over recall).
+### The test for a duplicate
 
-Return ONLY valid JSON (no explanation, no markdown):
+Two mentions are SYNONYMOUS ONLY if they are denoting the same person, organization, place, work, event, or concept -- such that **every statement true of one is true of the other**, and merging them would LOSE NO INFORMATION.
+
+Apply it by substitution: if you swapped one mention for the other in a sentence, would the meaning stay identical?
+- "Chris Nolan" / "Christopher Nolan" -- identical meaning. SYNONYMOUS.
+- "Nobel Prize" / "Nobel Prize in Physics" -- one is the award family, the other a specific award. Merging discards "in Physics". NOT SYNONYMOUS.
+
+### Type rules
+
+- SIMILAR types allow merging only if the entity name, combined with the type, refers to the same real-world entity ("Christopher Nolan [film director]" / "Chris Nolan [filmmaker]" / "Nolan [human]").
+- Abbreviations, nicknames, spelling and case variants, and partial names merge with their full form when the type context supports it.
+
+### Do not invent a name
+
+The canonical name must be one of the given mentions (or its fuller spelling). Never invent a broader umbrella term to cover a group -- if you find yourself reaching for a general word that covers several mentions, that is proof they are NOT duplicates and must stay separate.
+
+When in doubt, keep entities SEPARATE. Precision matters far more than recall here: a wrong merge destroys two entities permanently, while a missed merge leaves both intact.
+
+Return ONLY valid JSON (no explanation, no markdown). Every input mention must appear in exactly one group:
 {"groups": [{"canonical_label": "<just the name>", "members": ["<name [type]>", ...]}, ...]}
 \end{lstlisting}
 
