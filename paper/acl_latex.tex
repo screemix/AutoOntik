@@ -134,69 +134,41 @@
 \begin{abstract}
 Graph-based retrieval-augmented generation depends on the quality of the knowledge graph (KG) it retrieves over, yet schema-free LLM-based extraction pipelines typically produce flat graphs: deduplicated entities and relations with no type hierarchy and no domain/range constraints.
 % We present AutoOntic, a pipeline that extends schema-free KG construction with hyponymy-aware type canonicalization, a priority-ordered hierarchy induction procedure, entity deduplication gated by the induced hierarchy, and domain/range constraint mining.
-We present AutoOntic, a pipeline that automatically constructs an
-ontology from text by canonicalizing open-vocabulary entity types and
-relations, inducing a hierarchy over the canonicalized types, and mining
-relation-level domain and range constraints. The induced hierarchy also
-guides entity deduplication during knowledge graph construction.
-We evaluate AutoOntic both intrinsically, against the reference ontologies of Text2KGBench's Wikidata-TekGen and DBpedia-WebNLG subsets, and extrinsically, on downstream retrieval accuracy on the MINE benchmark. Across two LLM backbones, AutoOntic's induced types agree with the reference ontology's domain and range classes on a majority of matched relations, and where they disagree, the mismatch is overwhelmingly a matter of granularity rather than an unrelated branch of the induced hierarchy. On MINE, a knowledge graph built around AutoOntic's typed, hierarchically organized structure correctly answers a majority of retrieval queries. Beyond the pipeline itself, we propose an evaluation methodology for schema-free ontology induction that scores an induced hierarchy directly against a benchmark's own reference ontology.
+We present AutoOntic, a pipeline that automatically constructs an ontology from text by canonicalizing open-vocabulary entity types and relations, inducing a hierarchy over the canonicalized types, and mining relation-level domain and range constraints. Its hierarchy induction procedure prioritizes types using corpus-derived relation-argument profiles and places them through local, LLM-adjudicated parent/child checks, allowing newly inserted types to trigger reassignment of existing parent-child links. The resulting hierarchy constrains entity deduplication and supports the induction of relation-level domain/range constraints.
+% We evaluate AutoOntic both intrinsically, against the reference ontologies of Text2KGBench's Wikidata-TekGen and DBpedia-WebNLG subsets, and extrinsically, on downstream retrieval accuracy on the MINE benchmark. Across two LLM backbones, AutoOntic's induced types agree with the reference ontology's domain and range classes on a majority of matched relations, and where they disagree, the mismatch is a matter of granularity rather than an unrelated branch of the induced hierarchy. On MINE, a knowledge graph built around AutoOntic's typed, hierarchically organized structure correctly answers a majority of retrieval queries.
+% We evaluate AutoOntic both intrinsically, against the reference ontologies of Text2KGBench's Wikidata-TekGen and DBpedia-WebNLG subsets, and extrinsically, on downstream retrieval accuracy on the MINE benchmark. Across two LLM backbones, over 90\% of AutoOntic's induced endpoint types on matched triples are semantically aligned with the reference domain and range classes: about half match exactly, while most remaining differences concern granularity rather than unrelated types. On MINE, knowledge graphs organized using an ontology built by AutoOntic correctly answer 73.93\% of retrieval queries.
+% Beyond the pipeline itself, we propose an evaluation methodology for schema-free ontology induction that scores an induced hierarchy directly against a benchmark's own reference ontology.
+For intrinsic evaluation, we introduce a
+reference-based protocol that classifies induced ontology types as exact, broader, narrower, or unrelated to reference domain and range classes. On the Wikidata-TekGen and DBpedia-WebNLG subsets of Text2KGBench, over 90\% of AutoOntic's induced endpoint types are semantically aligned with the reference classes across two LLM backbones: about half match exactly, while most remaining differences concern granularity. On MINE, knowledge graphs organized using an ontology built by AutoOntic achieve 73.93\% retrieval accuracy.
+
 \end{abstract}
 
 \begin{figure}[t]
 \centering
-\includegraphics[height=0.46\textheight,keepaspectratio]{pipeline_architecture 1.pdf}
-\caption{The AutoOntic pipeline. A schema-free LLM extractor (\S\ref{sec:extraction}) produces raw triplets $\mathcal{G}=(s,t_s,r,o,t_o,Q)$, canonicalized into a relation vocabulary $\mathcal{R}^*$ (\S\ref{sec:relation-dedup}) and a type vocabulary $\mathcal{T}^*$ organized into a single-parent is-a hierarchy (\S\ref{sec:type-dedup}). Entity mentions are then deduplicated using that hierarchy as a symbolic gate (\S\ref{sec:entity-dedup}), and domain/range constraints are mined by re-resolving $\mathcal{G}$ against $\mathcal{R}^*$, $\mathcal{T}^*$, and the hierarchy (\S\ref{sec:constraints}). Colored dashed arrows mark additional direct inputs beyond the sequential chain.}
+\includegraphics[height=0.46\textheight,keepaspectratio]{pipeline_architecture.pdf}
+\caption{The AutoOntic pipeline. A schema-free LLM extractor (\S\ref{sec:extraction}) produces raw triplets $\mathcal{G}=(s,t_s,r,o,t_o,Q)$, canonicalized into a relation vocabulary $\mathcal{R}^*$ (\S\ref{sec:relation-dedup}) and a type vocabulary $\mathcal{T}^*$ organized into a single-parent is-a hierarchy $\mathcal{H}^*$(\S\ref{sec:type-dedup}). Entity mentions are then deduplicated using that hierarchy as a symbolic gate (\S\ref{sec:entity-dedup}), and domain/range constraints are mined by re-resolving $\mathcal{G}$ against $\mathcal{R}^*$, $\mathcal{T}^*$, and  $\mathcal{H}^*$(\S\ref{sec:constraints}). Colored dashed arrows mark additional direct inputs beyond the sequential chain.}
 \label{fig:pipeline}
 \end{figure}
 
 \section{Introduction}
 \label{sec:introduction}
 
-% Retrieval-augmented generation (RAG) grounds large language model (LLM) outputs in evidence retrieved at inference time \citep{lewis2020retrieval}, but retrieval over unstructured, chunked text struggles with multi-hop questions whose evidence is scattered across many chunks or documents. Graph-based RAG addresses this by retrieving over a knowledge graph (KG) instead of flat passages to support multi-hop reasoning and
-% query-time generalization over specific mentions \citep{edge2024graphrag}.
-% The quality of graph-based retrieval is therefore bounded by the quality of the KG that backs it: a graph with redundant, untyped nodes and unconstrained edges offers little more structure than the text it was extracted from \citep{chepurova2026wikontic}.
+Retrieval-augmented generation (RAG) grounds large language model (LLM) outputs in retrieved evidence \citep{lewis2020retrieval}. However, retrieval over chunked text can struggle when answering multi-hop questions that require connecting evidence across documents. Graph-based RAG represents evidence as entities and relations, enabling retrieval across connected facts \citep{edge2024graphrag}. Its effectiveness nevertheless depends on the structure of the underlying knowledge graph (KG). In particular, a hierarchy of entity types can represent general categories and their specializations, while relation domain and range constraints can express which types of entities a relation connects. These structures provide a basis for category-level retrieval and structural validation, but must be constructed reliably to be useful \citep{chepurova2026wikontic}.
 
-Retrieval-augmented generation (RAG) grounds large language model (LLM) outputs in evidence retrieved at inference time \citep{lewis2020retrieval}, but retrieval over unstructured, chunked text struggles with multi-hop questions whose evidence is scattered across many chunks or documents. Graph-based RAG addresses this by retrieving over a knowledge graph (KG) instead of flat passages, supporting multi-hop reasoning and query-time generalization over specific mentions rather than only exact ones \citep{edge2024graphrag}. This generalization, however, depends on the graph having actual type structure to generalize over. A graph with redundant, untyped nodes and unconstrained edges offers little more than the text it was extracted from \citep{chepurova2026wikontic}, since there is no category level above individual mentions to generalize to. Constructing that structure, a canonical, typed vocabulary organized into an is-a hierarchy with explicit domain/range constraints, and verifying that it is actually correct, without manual schema curation for every new corpus, is the problem this paper addresses.
+Constructing such a KG from text requires more than extracting and deduplicating entities and relations. Recent schema-free approaches such as KGGen \citep{mo2025kggen} use embedding-based clustering and LLM verification to canonicalize open-vocabulary entity and relation labels. However, this canonicalization is flat: it does not represent subsumption between entity types or provide explicit relation domain and range constraints. Without this structural information, entity merging relies primarily on embedding similarity and LLM judgments, without a type-based symbolic signal to distinguish mentions that are lexically similar but semantically incompatible. For example, a film and a book with the same title may have identical surface forms but refer to distinct entities; their types provide a structural signal against merging them. A type hierarchy can also support retrieval beyond exact matches by allowing a query about a general category to match instances of its more specific types. Existing ontologies can supply such structure \citep{chepurova2026wikontic}, but adapting them to a new corpus may require aligning corpus-specific vocabulary with the available schema and adding concepts it does not cover. This motivates methods that induce a corpus-grounded ontology while allowing existing ontologies to be reused when available.
 
-Constructing a KG that actually supports this kind of retrieval requires
-more than extracting entities and relations. It requires (i) a canonical,
-deduplicated vocabulary of entity and relation surface forms, (ii) an
-explicit \emph{is-a} hierarchy over entity types, so that a query about a
-general category (e.g.\ \emph{artwork}) can retrieve instances of any of
-its specializations without enumerating every leaf type by hand, and (iii)
-relation-level domain and range constraints, so that a retrieved triple
-can be validated against the schema the KG itself induces. Traditional
-ontology engineering supplies all three by hand, at a cost that does not
-scale to open-domain corpora. Hand-curated top-level ontologies such as
-DOLCE \citep{borgo2023dolce} offer stable, philosophically motivated
-top-level structure but cannot be extended automatically to an arbitrary
-corpus's vocabulary.
+Moving from flat canonicalization to ontology induction introduces additional challenges. First, type labels must be consolidated without confusing synonyms with specializations: film and movie may denote the same category, whereas documentary film is a subtype of film and should remain a distinct type. Embedding similarity alone cannot reliably make this distinction. Moreover, a similarity alone does not determine how granularly the type vocabulary should be divided: it cannot specify which distinctions between categories should be preserved as separate types and which labels should be consolidated into one. For example, merging film with documentary film would erase a meaningful category distinction, while keeping film and movie separate would introduce unnecessary duplication. Second, the hierarchy must accommodate newly discovered types that may require revising earlier parent-child assignments. Finally, relation canonicalization must preserve argument direction: treating `director of` and `directed by` by as equivalent without correcting their argument order would corrupt the evidence used to infer domain and range constraints.
 
-Recent work instead automates (i) directly from text with LLMs. KGGen \citep{mo2025kggen} extracts open-vocabulary triplets and merges near-duplicate entity and relation surface forms through embedding-based clustering and LLM-adjudicated verification, producing a substantially cleaner graph than raw extraction alone. However, canonicalization in KGGen and other schema-free extraction pipelines is flat, so the resulting graph has no type hierarchy and no domain/range constraints. Without types, clustering has no symbolic signal to fall back on and must rely on embedding similarity and LLM judgment alone. This raises a concrete risk: distinct entities or relations that are surface-similar but semantically different (e.g., a film and a biography of its director) are more likely to be over-merged. A type hierarchy also gives downstream retrieval a coarser fallback unit when an exact entity or relation match is missed.
 
-Extending flat canonicalization into a typed, hierarchical ontology introduces three problems that flat deduplication never has to face.
-First, type labels are themselves open-vocabulary free text, so they need the same clustering-plus-LLM-verification treatment as entities and relations. But naively merging similar type labels tends to conflate a general category with its own specializations, for example \emph{film} and \emph{documentary film}: the two look embedding-similar even though one is strictly more specific than the other.
-
-Second, inducing a hierarchy over the resulting canonical types is a separate problem from canonicalizing them. If placement happens in a single pass, or bottom-up, a type can get permanently attached under too general a parent. This happens whenever a more specific sibling type is only discovered later, since nothing revisits the earlier placement to correct it. Third, relation canonicalization merges surface forms without regard to grammatical role. A canonical relation can therefore silently pool a predicate together with its grammatical inverse (e.g.\ \emph{directed} and \emph{was directed by}). This fragments the domain/range evidence that constraint induction relies on, instead of reinforcing it.
-
-We present \textbf{AutoOntic}, an ontology construction pipeline that extends schema-free approaches to close this gap: on top of a
-deduplicated entity and relation vocabulary, it produces a
+We present \textbf{AutoOntic}, an ontology construction pipeline that extends schema-free approaches to close this gap: on top of a deduplicated entity and relation vocabulary, it produces a
 hyponymy-aware, hierarchically organized type vocabulary, an entity
 vocabulary deduplicated against that hierarchy, and a set of
-per-relation domain/range constraints mined from it.
+per-relation domain/range constraints mined from it. The system can also extend an existing ontology when one is provided.
 (\S\ref{sec:methods}). Our contributions are:
 \begin{itemize}
-  \item AutoOntic, extraction and
-  canonicalization pipeline that induces a type hierarchy and
-  domain/range constraints from raw text with no predefined schema
-  (\S\ref{sec:methods}).
-  \item An evaluation approach for schema-free ontology induction that
-  scores an induced type hierarchy and its domain/range constraints
-  directly against a benchmark's own reference ontology (\S\ref{sec:evaluation}).
-  \item Empirical evidence that the induced type hierarchy improves
-  downstream retrieval: a knowledge graph built around AutoOntic's typed,
-  hierarchically organized structure correctly answers a majority of
-  MINE's retrieval queries (\S\ref{sec:eval-mine}, \S\ref{sec:results-mine}).
+  \item AutoOntic, a schema-free ontology induction method that combines corpus-derived relation-argument profiles with priority-ordered, top-down type placement. Unlike flat canonicalization, the procedure explicitly tests subsumption relationships and can retroactively reassign parent-child links when newly inserted types reveal a more specific placement. The resulting hierarchy is then used to constrain entity deduplication and to generalize observed relation domain/range types.
+  \item An evaluation approach for schema-free ontology induction that scores an induced type hierarchy and its domain/range constraints directly against a benchmark's own reference ontology, classifying each type mismatch as \textsc{Exact}, \textsc{More General}, or \textsc{More Narrow} rather than a flat right/wrong (\S\ref{sec:evaluation}).
+  \item Empirical evidence that the induced type hierarchy improves downstream retrieval: over 90\% of AutoOntic's induced types are semantically aligned with the reference classes, and on MINE, knowledge graphs organized around AutoOntic's typed, hierarchically organized structure achieve 73.93\% retrieval accuracy, correctly answering a majority of MINE's retrieval queries (\S\ref{sec:eval-mine}, \S\ref{sec:results-mine}).
 \end{itemize}
 \section{Methods: AutoOntic}
 \label{sec:methods}
@@ -215,17 +187,17 @@ The pipeline runs ordered stages, described in
 \S\ref{sec:relation-dedup}--\S\ref{sec:constraints}:  \emph{(1) Initial typed triplet extraction}, \emph{(2) relation
 canonicalization}, \emph{(2) entity-type canonicalization}, which also
 induces a taxonomy hierarchy over the resulting type vocabulary,
-\emph{(3) entity canonicalization and class assignment}, and \emph{(4)
+\emph{(3) entity class assignment and canonicalization}, and \emph{(4)
 domain/range constraint induction}. The ordering is dictated by data
 dependencies. Entity-type canonicalization is conditioned on the canonical relation vocabulary as a disambiguating signal. Entity deduplication runs after the type hierarchy because it uses the hierarchy as a symbolic gate for candidate synonyms. Constraint induction derives relation constraints directly from the extracted triplets and the outputs of the first two stages.
 
+\paragraph{Shared canonicalization procedure.}
 \label{sec:reoccurring-design}
-The following design choices reoccur across stages. (1) Deduplication of synonymous surface forms is performed by clustering Contriever sentence embeddings \citep{izacard2022contriever} with HDBSCAN \citep{campello2013hdbscan} at a stage-specific cosine-similarity threshold $\theta$, and every merge/split decision is adjudicated by a single LLM call per candidate cluster. (2) Merging is done through several rounds: each round re-embeds the current pool, re-clusters it, and sends multi-member clusters to the LLM for verification, folding accepted merges back into the pool for the next round. Rounds stop once one produces no further reduction in pool size, or a fixed round cap $R$ is reached. (3) The result of each stage is checkpointed once it completes, allowing independent inspection of every stage's output and reuse in follow-up experiments. Every $\theta$ and $R$ instance below is stage-specific (relation, type, and entity deduplication each set their own); concrete values for these and every other hyperparameter introduced in \S\ref{sec:relation-dedup}--\S\ref{sec:constraints} are collected in Table~\ref{tab:hyperparams} (Appendix~\ref{sec:appendix-hyperparams}).
+The following design choices reoccur across stages. (1) Deduplication of synonymous surface forms is performed by clustering Contriever sentence embeddings \citep{izacard2022contriever} with HDBSCAN \citep{campello2013hdbscan} at a stage-specific cosine-similarity threshold $\theta$, and every merge/split decision is adjudicated by a single LLM call per candidate cluster. (2) Merging is done through several rounds: each round re-embeds the current pool, re-clusters it, and sends multi-member clusters to the LLM for verification, folding accepted merges back into the pool for the next round. The procedure repeats until the vocabulary size stops reducing or a configurable round limit $R$ is reached. (3) The result of each stage is checkpointed once it completes, allowing independent inspection of every stage's output and reuse in follow-up experiments. Every $\theta$ and $R$ instance below is stage-specific (relation, type, and entity deduplication each set their own); concrete values for these and every other hyperparameter introduced in \S\ref{sec:relation-dedup}--\S\ref{sec:constraints} are collected in Table~\ref{tab:hyperparams} (Appendix~\ref{sec:appendix-hyperparams}).
 
 \subsection{Initial Typed Triplet Extraction}
 \label{sec:extraction}
-Subject and object types are extracted as free text, not
-constrained to any predefined schema. This schema-free design allows the canonical type vocabulary used throughout the rest of the pipeline to emerge from the data itself. The full extraction prompt is given in Appendix~\ref{sec:appendix-prompts}, Listing~\ref{lst:extraction}.
+An LLM extracts subject--relation--object triplets enriched with subject/object types and contextual qualifiers with meta-information that cannot be expressed as a standalone triplet such as time, location, or condition. Types are initially unconstrained free text. Each extracted record has the form $g=(s,t_s,r,o,t_o,Q)$, where $s,o$ are entity mentions, $t_s,t_o$ their raw types, $r$ the relation, and $Q$ an optional qualifier list. The extracted records form $\mathcal{G}$. The full extraction prompt is given in Appendix~\ref{sec:appendix-prompts}, Listing~\ref{lst:extraction}.
 
 \subsection{Relation Canonicalization}
 \label{sec:relation-dedup}
@@ -241,74 +213,82 @@ $\theta_r$, as described in \S\ref{sec:reoccurring-design}. Every multi-member c
 This stage both flattens the raw type vocabulary into a canonical set
 $\mathcal{T}^*$ and organizes $\mathcal{T}^*$ into a taxonomy hierarchy $\mathcal{H}^*$.
 
-\subsubsection{Type Deduplication}
-
+\paragraph{Type Deduplication}
 Candidate clusters over raw type labels are generated the same way as for
-relations (\S\ref{sec:relation-dedup}, threshold $\theta_t$), but with one additional source of evidence: each candidate label shown to the LLM verifier is annotated with the top $k_{\text{ctx}}$ canonical relations it most often co-occurs with (a PPMI-weighted relation-argument profile), giving the verifier concrete distributional evidence beyond the bare label string.
+relations (\S\ref{sec:relation-dedup}, threshold $\theta_t$), but with one additional source of evidence: each candidate label shown to the LLM verifier is annotated with the top $k_{\text{ctx}}$ canonical relations it most often co-occurs with (a PPMI-weighted relation-argument profile). These profiles provide corpus-derived structural evidence beyond lexical or embedding similarity: two types may have similar labels but different relational roles, or different labels but nearly identical distributions of relational contexts. The verification step uses this evidence alongside the labels to decide whether a candidate pair should be merged.
 
-The verification prompt additionally enforces a hyponymy (``kind of'') test: two labels are merged only if neither is a hyponym of the other, even when their relation-argument profiles overlap almost entirely. For example, \ \emph{documentary film} and \emph{film} participate in the same relations, but LLM is instructed to keep them distinct, whereas \emph{movie} and \emph{film}, true synonyms, should
+The verification prompt additionally enforces a hyponymy (``kind of'') test: two labels are merged only if neither is a hyponym of the other, even when they are lexically similar or their relation-argument profiles overlap almost entirely. For example, \ \emph{documentary film} and \emph{film} are similar and participate in the same relations, but LLM is instructed to keep them distinct, whereas \emph{movie} and \emph{film}, true synonyms, should
 be merged. The full prompt is given in Listing~\ref{lst:cluster-entity-types}. As in relation deduplication, this embed-cluster-verify cycle repeats for up to $R_t$ rounds until a round adds no further reduction to $\mathcal{T}^*$.
 
-\subsubsection{Hierarchy induction}
+\paragraph{Hierarchy induction}
 \label{sec:hierarchy-induction}
+Flat type canonicalization removes surface redundancy but does not encode subsumption relationships between them. AutoOntic therefore induces an explicit is-a hierarchy over $\mathcal{T}^*$ to support two operations that depend on these relationships: restricting entity-merge candidates to structurally compatible types
+(\S\ref{sec:entity-dedup}) and generalizing observed domain/range types to shared ancestors when estimating relation constraints (\S\ref{sec:constraints}).
 
-Flat canonicalization removes surface redundancy but does not recover
-subsumption structure. A typed knowledge graph needs an explicit is-a hierarchy over $\mathcal{T}^*$, both to gate candidate pairs during entity deduplication (\S\ref{sec:entity-dedup}) and to generalize sparse domain/range observations during constraint induction (\S\ref{sec:constraints}). We induce this hierarchy with a single
-priority-ordered, top-down, pairwise placement procedure:
+In AutoOntic, canonical types are organized into a single-parent hierarchy $\mathcal{H}^*$, which may form a forest.
+To prioritize type placement, we compare the PPMI-weighted relation-argument profiles associated with each canonical type. Following the distributional inclusion principle, a more general type is expected to occur in a broader range of relational contexts than its more specific subtypes. We use Weeds precision \citep{weeds2004characterising} to estimate the extent to which the contexts associated with one type are contained in those associated with another. The resulting containment scores provide an approximate ordering for hierarchy construction; they are not treated as proof of subsumption. Actual parent-child relationships are determined by the subsequent LLM-adjudicated placement procedure, which can revise earlier attachments as additional types are inserted.
 
-\paragraph{Priority queue.} Every canonical type in $\mathcal{T}^*$ is
-represented by a relation-argument profile, PPMI-weighted by default. A
-one-shot pass based on the Weeds precision containment measure
-\citep{weeds2004characterising} computes
-for every type $u$, an in-degree score counting how many other types $v$
-look containable within it:
-\begin{equation}
-  \label{eq:weeds-indeg}
-  \mathrm{deg_{in}}(u) = \bigl| \{\, v \neq u : \mathrm{WeedsPrec}(v, u) \geq
-  \tau \,\} \bigr|.
-  \\
-\end{equation}
-$\mathrm{WeedsPrec}(v, u)$ is the fraction of $v$'s relation-argument weight that $u$
-also exhibits:
-\begin{equation}
-  \mathrm{WeedsPrec}(v,u) =
-  \frac{\sum_{f \in F(v)\cap F(u)} w_v(f)}
-       {\sum_{f \in F(v)} w_v(f)},
-\end{equation}
-and $F(v)$ is the set of relation-argument features with nonzero
-weight for $v$, and $\tau$ is a fixed containment threshold (Table~\ref{tab:hyperparams}). The in-degree is a structural signal: types are grouped into priority batches from highest in-degree to lowest to identify high-level ontology concepts first.
+% Types are inserted into the $\mathcal{H*}$ one by one from general to specific. The hierarchy can be initialized from a seed or existing ontology and extended with types discovered in new text. External ontologies can be used as seeds for the $\mathcal{H*}$, so AutoOntic can complement existing ontology. To place an entity type, AutoOntic traverses the currently built hierarchy $\mathcal{H*}$ downward from the current roots. At each level, the LLM performs separate \textbf{parent} and, if no parent is found, \textbf{child} checks. A parent match continues traversal through that node's children. A child match attaches the matched nodes beneath the new type, reattaching ancestors that would create cycles, and stops traversal. If neither succeeds, the type is inserted at the current position. When a level contains more than $B$ candidates, a consolidation call attaches clear siblings under synthesized parents proposed by the LLM. The prompt for parent/child check, and consolidation calls are presented in Appendix~\ref{sec:appendix-hierarchy-pairwise}.
+
+Rather than asking an LLM to organize the entire type vocabulary in a single call, AutoOntic decomposes placement into local decisions over the current hierarchy $\mathcal{H*}$, inserting into the one by one from sorted general to specific. Starting from the roots, the procedure checks whether the new type belongs below an existing node or should instead become a parent of one or more existing nodes. A parent match directs the traversal into that node's subtree; a child match triggers insertion and reassignment of the affected parent-child links. If neither relation holds, the type is placed at the current position. When a level contains too many candidates for a single comparison, a consolidation call groups clear siblings under a proposed parent.
+
+This design keeps each decision focused on a bounded part of the hierarchy, reducing the context required for an individual LLM call and avoiding repeated presentation of the entire ontology. More importantly, the decisions have explicit structural consequences: a later, more general type can correct an earlier attachment by becoming the parent of an existing node. Thus, the procedure does not merely append labels to a taxonomy; it incrementally constructs and repairs the hierarchy as new evidence becomes available. The local checks, consolidation procedure, and reassignment rules are specified in Appendix D.4.
+
+% \paragraph{Priority queue.} Every canonical type in $\mathcal{T}^*$ is
+% represented by a relation-argument profile, PPMI-weighted by default. A
+% one-shot pass based on the Weeds precision containment measure
+% \citep{weeds2004characterising} computes
+% for every type $u$, an in-degree score counting how many other types $v$
+% look containable within it:
+% \begin{equation}
+%   \label{eq:weeds-indeg}
+%   \mathrm{deg_{in}}(u) = \bigl| \{\, v \neq u : \mathrm{WeedsPrec}(v, u) \geq
+%   \tau \,\} \bigr|.
+%   \\
+% \end{equation}
+% $\mathrm{WeedsPrec}(v, u)$ is the fraction of $v$'s relation-argument weight that $u$
+% also exhibits:
+% \begin{equation}
+%   \mathrm{WeedsPrec}(v,u) =
+%   \frac{\sum_{f \in F(v)\cap F(u)} w_v(f)}
+%        {\sum_{f \in F(v)} w_v(f)},
+% \end{equation}
+% and $F(v)$ is the set of relation-argument features with nonzero
+% weight for $v$, and $\tau$ is a fixed containment threshold (Table~\ref{tab:hyperparams}). The in-degree is a structural signal: types are grouped into priority batches from highest in-degree to lowest to identify high-level ontology concepts first.
 % If a set of external seed labels is supplied, each is matched to
 % $\mathcal{T}^*$ by normalized label (or synthesized fresh if unmatched) and pinned at the top of the queue as a root candidates with no other node can be a parent of which; without seeds, the top band of the same ranking performs root discovery instead.
 
-\paragraph{Per-node placement.} Each node is routed top-down through
-any higher-priority batches have already placed: at every level, the
-remaining candidates (initially the whole pool; during descent, an
-already-placed node's existing children) are shown to the LLM in
-similarity-ranked batches of size $B$ (the \emph{candidate batch size}; Listing~\ref{lst:hierarchy-pairwise}), and a response of ``none of these'' escalates to the next, less-similar batch, up to $E$ escalation batches (the \emph{escalation cap}). Every
-batch response is one of five outcomes:
-% \textbf{synonym} of a candidate, \textbf{child of} a candidate, \textbf{parent of} a candidate, \textbf{same class} as a candidate, \textbf{none} of the candidates.
-\begin{itemize}
-  \item \textbf{synonym} of a candidate: merge the two synonymous nodes that were not captured in flat clustering deduplication.
-  \item \textbf{child of} a candidate: descend one level deeper into that
-  candidate's own children at the next iteration, rather than attaching
-  immediately, so that a more specific attachment is never preempted.
-  \item \textbf{parent of} candidates: insert the incoming node
-  \emph{above} the defined candidates, detaching its existing parent edge (if any)
-  and reattaching it beneath the new node, which then settles at the
-  current level.
-  \item \textbf{same class} as a candidate: neither contains the other, but
-  the two are plausible siblings (e.g.\ \emph{war film} and \emph{action film}, both
-  film genres). A new shared parent is synthesized -- a short label and
-  one-sentence definition invented on the spot -- and both the incoming node
-  and the matched candidate are attached beneath it; the new parent re-enters
-  the pool to be placed by a later band, the same as any other node.
-  \item \textbf{none} of the candidates fit at any escalation batch: the
-  node settles at its current position, as a new root if this occurred at
-  the top level, or as an ordinary child of its current descent anchor
-  otherwise.
-\end{itemize}
 
-Figure~\ref{fig:hierarchy-steps} works through all five outcomes on a small film-domain vocabulary, one placement decision per step.
+
+% \paragraph{Per-node placement.} Each node is routed top-down through
+% any higher-priority batches have already placed: at every level, the
+% remaining candidates (initially the whole pool; during descent, an
+% already-placed node's existing children) are shown to the LLM in
+% similarity-ranked batches of size $B$ (the \emph{candidate batch size}; Listing~\ref{lst:hierarchy-pairwise}), and a response of ``none of these'' escalates to the next, less-similar batch, up to $E$ escalation batches (the \emph{escalation cap}). Every
+% batch response is one of five outcomes:
+% % \textbf{synonym} of a candidate, \textbf{child of} a candidate, \textbf{parent of} a candidate, \textbf{same class} as a candidate, \textbf{none} of the candidates.
+% \begin{itemize}
+%   \item \textbf{synonym} of a candidate: merge the two synonymous nodes that were not captured in flat clustering deduplication.
+%   \item \textbf{child of} a candidate: descend one level deeper into that
+%   candidate's own children at the next iteration, rather than attaching
+%   immediately, so that a more specific attachment is never preempted.
+%   \item \textbf{parent of} candidates: insert the incoming node
+%   \emph{above} the defined candidates, detaching its existing parent edge (if any)
+%   and reattaching it beneath the new node, which then settles at the
+%   current level.
+%   \item \textbf{same class} as a candidate: neither contains the other, but
+%   the two are plausible siblings (e.g.\ \emph{war film} and \emph{action film}, both
+%   film genres). A new shared parent is synthesized -- a short label and
+%   one-sentence definition invented on the spot -- and both the incoming node
+%   and the matched candidate are attached beneath it; the new parent re-enters
+%   the pool to be placed by a later band, the same as any other node.
+%   \item \textbf{none} of the candidates fit at any escalation batch: the
+%   node settles at its current position, as a new root if this occurred at
+%   the top level, or as an ordinary child of its current descent anchor
+%   otherwise.
+% \end{itemize}
+
+Figure~\ref{fig:hierarchy-steps} demonstrates populating $\mathcal{H*}$, one placement decision per step.
 
 \begin{figure*}[t]
 \centering
@@ -324,59 +304,69 @@ edges follow directly from the construction.
 \subsection{Entity Canonicalization}
 \label{sec:entity-dedup}
 
-Entity deduplication canonicalizes entity mentions and  assigns each canonical entity types. An entity's identity is the compound pair (name, canonical type) rather than name alone, so
-that homonymous names typed differently (e.g.\ \emph{Paris} the city versus
-\emph{Paris} the person) are never conflated by construction.
+Entity canonicalization step assigns each entity its canonical type  and deduplicates synonimous mentions. An entity's identity is the compound pair (name, canonical type) rather than name alone, so
+that homonymous names typed differently (e.g.\ \emph{Paris} the city versus \emph{Paris} the person) are never conflated by construction.
 
 Before embedding-based comparison, candidate pairs are restricted by a symbolic gate: two mentions are only ever compared if they share
 literally the same type, or are siblings under the same parent
-in the induced type hierarchy (\S\ref{sec:hierarchy-induction}). HDBSCAN call only ever compares candidates within one sibling
-group.
-
-Within each partition, merging then follows the round-based procedure common to every deduplication stage (\S\ref{sec:reoccurring-design}, Listing~\ref{lst:cluster-entity-names}), applied independently per partition. Candidates are clustered at similarity threshold $\theta_e$, and each partition's embed-cluster-verify cycle repeats for up to $R_e$ rounds.
+in the induced type hierarchy (\S\ref{sec:hierarchy-induction}). Clustering entities surface forms is performed with HDBSCAN  among candidates within one sibling
+group. Within each such partition, merging then follows the round-based procedure common to every deduplication stage (\S\ref{sec:reoccurring-design}, Listing~\ref{lst:cluster-entity-names}), applied independently per partition. Candidates are clustered at similarity threshold $\theta_e$, and each partition's embed-cluster-verify cycle repeats for up to $R_e$ rounds.
 
 \subsection{Constraints Induction}
 \label{sec:constraints}
 
-\paragraph{Stage 0: re-resolution.} For every raw triplet, its subject and
-object type strings and its relation string are looked up against the
-canonical vocabularies produced by \S\ref{sec:relation-dedup} and
-\S\ref{sec:type-dedup}.
+% \paragraph{Stage 0: re-resolution.} For every raw triplet, its subject and
+% object type strings and its relation string are looked up against the
+% canonical vocabularies produced by \S\ref{sec:relation-dedup} and
+% \S\ref{sec:type-dedup}.
 
-\paragraph{Stage 1: relation-direction resolution.} Because relation
-canonicalization merges surface forms without regard to grammatical role
-(\S\ref{sec:relation-dedup}), a canonical relation can silently pool a
-predicate together with its grammatical inverse (e.g.\ \emph{directed} and
-\emph{was directed by}). Hence, for every canonical relation with more than one
-surface form, a single LLM call classifies each surface form against the
-canonical label as \emph{forward} or \emph{inverted} (Listing~\ref{lst:relation-direction}); triplets whose
-original predicate was classified as inverted have their subject and object types swapped before the next stage.
+% \paragraph{Stage 1: relation-direction resolution.} Because relation
+% canonicalization merges surface forms without regard to grammatical role
+% (\S\ref{sec:relation-dedup}), a canonical relation can silently pool a
+% predicate together with its grammatical inverse (e.g.\ \emph{directed} and
+% \emph{was directed by}). Hence, for every canonical relation with more than one
+% surface form, a single LLM call classifies each surface form against the
+% canonical label as \emph{forward} or \emph{inverted} (Listing~\ref{lst:relation-direction}); triplets whose
+% original predicate was classified as inverted have their subject and object types swapped before the next stage.
 
-\paragraph{Stage 2: hierarchy generalization.} For each canonical
-relation's domain (subject-role types) and range (object-role types),
-considered independently, we compute the exact lowest common ancestor (LCA) of
-all observed types in the single-parent hierarchy. If the observed types span disconnected
-parts of the hierarchy forest, they are partitioned by which root each
-descends from and an LCA is computed independently within each partition,
-yielding more than one domain (or range) signature and hence more than
-one constraint for relations that genuinely connect unrelated type
-families.
+% \paragraph{Stage 2: hierarchy generalization.} For each canonical
+% relation's domain (subject-role types) and range (object-role types),
+% considered independently, we compute the exact lowest common ancestor (LCA) of
+% all observed types in the single-parent hierarchy. If the observed types span disconnected
+% parts of the hierarchy forest, they are partitioned by which root each
+% descends from and an LCA is computed independently within each partition,
+% yielding more than one domain (or range) signature and hence more than
+% one constraint for relations that genuinely connect unrelated type
+% families.
 
-\paragraph{Stage 3: confidence scoring.} Triplets are regrouped by their
-resolved, direction-corrected (domain signature, range signature) pair, and
-we compute a partial-completeness-assumption (PCA) style confidence
-\citep{galarraga2013amie} for each pair as its joint support over the
-relation's total triplet count:
+% \paragraph{Stage 3: confidence scoring.} Triplets are regrouped by their
+% resolved, direction-corrected (domain signature, range signature) pair, and
+% we compute a partial-completeness-assumption (PCA) style confidence
+% \citep{galarraga2013amie} for each pair as its joint support over the
+% relation's total triplet count:
+% \begin{equation}
+%   \label{eq:pca-confidence}
+%   \mathrm{conf}(r, T_d, T_r) = \frac{\mathrm{support}(r, T_d,
+%   T_r)}{\mathrm{total}(r)}.
+% \end{equation}
+% This confidence is thresholded into \textsc{Hard} ($\mathrm{conf} \geq
+% \tau_{\text{hard}}$), \textsc{Soft} ($\geq \tau_{\text{soft}}$), and
+% \textsc{Hint} ($\geq \tau_{\text{hint}}$) constraint strengths, discarded
+% below $\tau_{\text{hint}}$ (values in Table~\ref{tab:hyperparams}).
+
+Constraint induction first re-resolves every raw triplet against the canonical relation $\mathcal{R*}$ and type $\mathcal{T*}$ vocabularies produced by \S\ref{sec:relation-dedup} and \S\ref{sec:type-dedup}. Because relation canonicalization may merge a predicate with its grammatical inverse (e.g.\ \emph{directed} and \emph{was directed by}), each canonical relation with multiple surface forms is processed by an LLM that classifies each form as \emph{forward} or \emph{inverted}; inverted forms then have their subject and object types swapped before constraint estimation.
+
+For each canonical relation's domain (subject-role types) and range (object-role types),
+considered independently. We compute the exact lowest common ancestor (LCA) of observed subect/object types in the single-parent hierarchy. If observations span disconnected roots, they are partitioned by root and an LCA is computed within each partition, yielding multiple domain/range signatures when a relation connects unrelated type families.
+
+For each canonical relation, domain and range types are considered independently. We compute the exact lowest common ancestor (LCA) of observed types in $\mathcal{H}^*$. If observations span disconnected roots, they are partitioned by root and an LCA is computed within each partition, yielding multiple domain/range signatures when a relation connects unrelated type families.
+
+Finally, triplets are grouped by their direction-corrected $(T_d,T_r)$ signature, and a PCA-style confidence \citep{galarraga2013amie} is computed as
 \begin{equation}
-  \label{eq:pca-confidence}
-  \mathrm{conf}(r, T_d, T_r) = \frac{\mathrm{support}(r, T_d,
-  T_r)}{\mathrm{total}(r)}.
+\mathrm{conf}(r,T_d,T_r)=
+\frac{\mathrm{support}(r,T_d,T_r)}{\mathrm{total}(r)}.
 \end{equation}
-This confidence is thresholded into \textsc{Hard} ($\mathrm{conf} \geq
-\tau_{\text{hard}}$), \textsc{Soft} ($\geq \tau_{\text{soft}}$), and
-\textsc{Hint} ($\geq \tau_{\text{hint}}$) constraint strengths, discarded
-below $\tau_{\text{hint}}$ (values in Table~\ref{tab:hyperparams}).
-
+Constraints are assigned \textsc{Hard}, \textsc{Soft}, or \textsc{Hint} strength according to thresholds $\tau_{\mathrm{hard}}$, $\tau_{\mathrm{soft}}$, and $\tau_{\mathrm{hint}}$.
 % \section{KG Retrieval and QA}
 % TODO -- not yet written.
 
@@ -536,32 +526,8 @@ ont\_10\_culture  & 56.6 & 58.5 & 89.5 & 89.2 \\
 Averaged & 69.1 & 70.3 & 79.4 & 81.2 \\
 \bottomrule
 \end{tabular}
-\caption{Recall (grounded-only, see \S\ref{sec:results-text2kgbench}) and extra rate (\S\ref{sec:evaluation}) per Wikidata-TekGen domain, \textsc{Separate} condition, judged by GPT-4o \citep{openai2024gpt4o}.}
+\caption{Recall (grounded-only, see \S\ref{sec:results-text2kgbench}) and extra rate (\S\ref{sec:evaluation}) per Wikidata-TekGen domain, judged by GPT-4o \citep{openai2024gpt4o}.}
 \label{tab:text2kgbench-separate}
-\end{table*}
-
-\begin{table*}[t]
-\centering
-\small
-\begin{tabular}{lllcccc}
-\toprule
-& & & \multicolumn{3}{c}{Related} & Unrelated \\
-\cmidrule(lr){4-6} \cmidrule(lr){7-7}
-Dataset & Model & Side & Exact & More Gen. & More Narrow & Not Rel. \\
-\midrule
-Wikidata-TekGen & Qwen3-Next-80B & Domain & 51.0 & 30.5 & 9.9  & 8.6 \\
-Wikidata-TekGen & Qwen3-Next-80B & Range  & 54.2 & 29.1 & 10.1 & 6.7 \\
-Wikidata-TekGen & gpt-oss-120b   & Domain & 57.8 & 10.8 & 23.1 & 8.3 \\
-Wikidata-TekGen & gpt-oss-120b   & Range  & 57.7 & 21.7 & 14.3 & 6.3 \\
-\midrule
-DBpedia-WebNLG  & Qwen3-Next-80B & Domain & 33.1 & 37.6 & 17.5 & 11.8 \\
-DBpedia-WebNLG  & Qwen3-Next-80B & Range  & 40.4 & 23.2 & 25.4 & 10.9 \\
-DBpedia-WebNLG  & gpt-oss-120b   & Domain & 27.2 & 36.2 & 23.7 & 12.9 \\
-DBpedia-WebNLG  & gpt-oss-120b   & Range  & 41.0 & 16.3 & 30.2 & 12.4 \\
-\bottomrule
-\end{tabular}
-\caption{Domain/range type-judgment distribution (\%, \S\ref{sec:evaluation}), averaged over matched pairs across all domains of each Text2KGBench subset.}
-\label{tab:text2kgbench-types}
 \end{table*}
 
 \begin{table*}[t]
@@ -596,8 +562,32 @@ ont\_19\_film                 & 91.8 & 94.4 & 16.6 & 16.6 \\
 Pooled & 76.2 & 78.8 & 25.1 & 23.0 \\
 \bottomrule
 \end{tabular}
-\caption{Recall (unfiltered, see \S\ref{sec:results-dbpedia}) and extra rate (\S\ref{sec:evaluation}) per DBpedia-WebNLG domain, \textsc{Separate} condition, judged by GPT-4o \citep{openai2024gpt4o}.}
+\caption{Recall and extra rate (\S\ref{sec:evaluation}) per DBpedia-WebNLG domain, judged by GPT-4o \citep{openai2024gpt4o}.}
 \label{tab:dbpedia-webnlg-separate}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\small
+\begin{tabular}{lllcccc}
+\toprule
+& & & \multicolumn{3}{c}{Related} & Unrelated \\
+\cmidrule(lr){4-6} \cmidrule(lr){7-7}
+Dataset & Model & Side & Exact & More Gen. & More Narrow & Not Rel. \\
+\midrule
+Wikidata-TekGen & Qwen3-Next-80B & Domain & 51.0 & 30.5 & 9.9  & 8.6 \\
+Wikidata-TekGen & Qwen3-Next-80B & Range  & 54.2 & 29.1 & 10.1 & 6.7 \\
+Wikidata-TekGen & gpt-oss-120b   & Domain & 57.8 & 10.8 & 23.1 & 8.3 \\
+Wikidata-TekGen & gpt-oss-120b   & Range  & 57.7 & 21.7 & 14.3 & 6.3 \\
+\midrule
+DBpedia-WebNLG  & Qwen3-Next-80B & Domain & 33.1 & 37.6 & 17.5 & 11.8 \\
+DBpedia-WebNLG  & Qwen3-Next-80B & Range  & 40.4 & 23.2 & 25.4 & 10.9 \\
+DBpedia-WebNLG  & gpt-oss-120b   & Domain & 27.2 & 36.2 & 23.7 & 12.9 \\
+DBpedia-WebNLG  & gpt-oss-120b   & Range  & 41.0 & 16.3 & 30.2 & 12.4 \\
+\bottomrule
+\end{tabular}
+\caption{Domain/range type-judgment distribution (\%, \S\ref{sec:evaluation}), averaged over matched pairs across all domains of each Text2KGBench subset.}
+\label{tab:text2kgbench-types}
 \end{table*}
 
 
@@ -651,13 +641,11 @@ KGGen, Gemini 2.0 Flash & 44 \\
 \section{Results}
 \label{sec:results}
 
-Across intrinsic ontology evaluation (Text2KGBench, \S\ref{sec:results-text2kgbench}--\S\ref{sec:results-dbpedia}) and extrinsic retrieval evaluation (MINE, \S\ref{sec:results-mine}), AutoOntic's schema-free construction recovers a type hierarchy and canonical vocabulary that align substantially with independently-curated reference ontologies and that support effective downstream retrieval.
-
 \subsection{Text2KGBench}
 \label{sec:results-text2kgbench}
 
-Table~\ref{tab:text2kgbench-separate} reports recall and extra rate
-(\S\ref{sec:evaluation}) per domain. We measure quality only on the dataset items
+Tables~\ref{tab:text2kgbench-separate}--\ref{tab:dbpedia-webnlg-separate} report recall and extra rate
+(\S\ref{sec:evaluation}) per domain. For Wikidata-TekGen subset, we measure quality only on the dataset items
 whose gold triple is actually supported by its own sentence text, as
 judged by an independent GPT-4o groundedness check
 (Appendix~\ref{sec:appendix-groundedness}): Text2KGBench's test sentences
@@ -666,7 +654,7 @@ topic, so a substantial fraction of gold subjects are established only
 anaphorically, outside what the pipeline is actually shown. 
 
 Table~\ref{tab:text2kgbench-types} reports the domain/range
-type-judgment distribution (\S\ref{sec:evaluation}) over matched pairs, separately for each Text2KGBench subset. It measures how well the induced ontology's classes align with the
+type-judgment distribution (\S\ref{sec:evaluation}) over matched pairs, separately for each ontology subset. It measures how well the induced ontology's classes align with the
 reference one. On Wikidata-TekGen, the induced type is an exact match to the gold class
 51.0--57.8\% of the time; where it differs, the remainder splits between a
 broader (\textsc{More General}) and a narrower (\textsc{More Narrow})
@@ -674,34 +662,35 @@ induced type rather than an unrelated one (\textsc{Not Related} stays
 under 9\% on the domain side and under 7\% on the range side for both backbones). These results provide evidence that most
 disagreement with the reference ontology is a matter of granularity, not an unrelated branch of the induced hierarchy.
 
-\subsection{DBpedia-WebNLG}
-\label{sec:results-dbpedia}
-
-Table~\ref{tab:dbpedia-webnlg-separate} reports recall and extra rate for
-both backbones on all 19 DBpedia-WebNLG domains. Unlike
-Table~\ref{tab:text2kgbench-separate}, these figures are not passed
-through a groundedness filter: DBpedia-WebNLG's sentences are generated
-directly from the gold triples (WebNLG's own construction method) rather
-than sampled from Wikipedia article bodies, so we did not perform a
-groundedness check for this subset. Averaged recall is 78.8\% for
-gpt-oss-120b and 76.2\% for Qwen3-Next-80B, with extra rates of 23.0\%
-and 25.1\% respectively -- the two backbones perform much more similarly
-here than on Wikidata-TekGen's domain/range type-judgment
-(Table~\ref{tab:text2kgbench-types}), where the gap between them was
-substantially wider.
-
-Table~\ref{tab:text2kgbench-types}'s DBpedia-WebNLG rows report the same
-type-judgment distribution for this subset. Exact match is lower here
-(27.2--41.0\% across sides and backbones) and \textsc{Not Related} is
-higher (10.9--12.9\%, versus under 9\% on Wikidata-TekGen) -- consistent
-with DBpedia-WebNLG's ontologies being curated independently of
-Wikidata's class system, so a type induced purely from AutoOntic's own
-corpus vocabulary is less likely to line up with a DBpedia class by
-construction. Even so, granularity mismatches (\textsc{More General}/\textsc{More Narrow})
+For DBpedia-WebNLG, exact match is lower (27.2--41.0\% across sides and backbones) and \textsc{Not Related} is
+higher (10.9--12.9\%, versus under 9\% on Wikidata-TekGen). Even so, granularity mismatches (\textsc{More General}/\textsc{More Narrow})
 still account for roughly 80\% of non-exact matches on both sides, so the
 induced hierarchy is still placing DBpedia-WebNLG's types in
-approximately the right region, just less often exactly on the reference
-node.
+approximately the right region.
+
+% \subsection{DBpedia-WebNLG}
+% \label{sec:results-dbpedia}
+
+% Table~\ref{tab:dbpedia-webnlg-separate} reports recall and extra rate for
+% both backbones on all 19 DBpedia-WebNLG domains. Unlike
+% Table~\ref{tab:text2kgbench-separate}, these figures are not passed
+% through a groundedness filter: DBpedia-WebNLG's sentences are generated
+% directly from the gold triples (WebNLG's own construction method) rather
+% than sampled from Wikipedia article bodies, so we did not perform a
+% groundedness check for this subset. Averaged recall is 78.8\% for
+% gpt-oss-120b and 76.2\% for Qwen3-Next-80B, with extra rates of 23.0\%
+% and 25.1\% respectively -- the two backbones perform much more similarly
+% here than on Wikidata-TekGen's domain/range type-judgment
+% (Table~\ref{tab:text2kgbench-types}), where the gap between them was
+% substantially wider.
+
+% Table~\ref{tab:text2kgbench-types}'s DBpedia-WebNLG rows report the same
+% type-judgment distribution for this subset. Exact match is lower here
+% (27.2--41.0\% across sides and backbones) and \textsc{Not Related} is
+% higher (10.9--12.9\%, versus under 9\% on Wikidata-TekGen). Even so, granularity mismatches (\textsc{More General}/\textsc{More Narrow})
+% still account for roughly 80\% of non-exact matches on both sides, so the
+% induced hierarchy is still placing DBpedia-WebNLG's types in
+% approximately the right region.
 
 
 \subsection{MINE}
@@ -710,6 +699,14 @@ node.
 Table~\ref{tab:mine} reports overall accuracy on MINE (\S\ref{sec:eval-mine}). AutoOntic built with gpt-oss-120b reaches 73.93\% accuracy vs KGGen 66\% with gpt4o (1{,}109/1{,}500 queries). Unlike the Text2KGBench evaluation above, MINE does not score agreement with a reference schema directly. It queries the constructed KG through embedding-similarity retrieval and a fixed-depth graph walk over entities. So this result demonstrates that the typed, canonicalized KG built for a corpus with no supplied schema improves downstream retrieval.
 
 \paragraph{Ontology Quality.} Taken together, Tables~\ref{tab:text2kgbench-separate}--\ref{tab:mine} suggest AutoOntic's schema-free construction recovers a usable typed ontology. Domain/range disagreement with the reference ontology (Table~\ref{tab:text2kgbench-types}) is dominated by granularity mismatches (\textsc{More General}/\textsc{More Narrow}) on both Text2KGBench subsets. Unrelated types (\textsc{Not Related}) stay under 9\% on Wikidata-TekGen and under 13\% on DBpedia-WebNLG, on both the domain and range sides. Together with MINE's retrieval accuracy, this is evidence that the induced hierarchy places types in approximately the right region of the ontology, and that this structure is usable for downstream retrieval, even where it does not converge on the exact reference granularity.
+
+\section{Conclusion}
+We presented AutoOntic, a schema-free ontology induction and KG construction pipeline that extends flat knowledge-graph extraction and canonicalization into a typed, hierarchically organized ontology: a hyponymy-aware type hierarchy induced via priority-ordered top-down placement, entity deduplication gated by that hierarchy rather than embedding similarity alone, and relation-level domain/range constraints mined by generalizing observed argument types up the induced hierarchy. The induced ontology's types align closely with the reference schema: over 90\% of AutoOntic’s induced endpoint types are semantically aligned with the reference classes. Matched extractions carry an exact-match type 51–58\% of the time, and where they diverge, this is overwhelmingly a matter of granularity. This indicates that schema-free hierarchy induction recovers structure substantively compatible with a hand-curated ontology. Across intrinsic ontology evaluation (Text2KGBench, \S\ref{sec:results-text2kgbench}) and extrinsic retrieval evaluation (MINE, \S\ref{sec:results-mine}), AutoOntic's schema-free construction recovers a type hierarchy and canonical vocabulary that align substantially with independently-curated reference ontologies and that support effective downstream retrieval.
+
+
+
+% Each stage targets a specific failure mode of naively applying flat deduplication to typed structure: conflating synonymy with hyponymy, letting placement order corrupt the resulting hierarchy, and letting relation canonicalization silently merge a predicate with its own grammatical inverse.
+
 
 \section*{Limitations}
 
@@ -720,6 +717,7 @@ Our evaluation measures agreement between the induced ontology and a benchmark's
 
 \bibliography{custom}
 
+\newpage
 \appendix
 
 \section{Hyperparameters}
@@ -780,7 +778,7 @@ Table~\ref{tab:appendix-tokens-text2kg} reports total prompt+completion
 tokens consumed by extraction (Step 0, \S\ref{sec:extraction}) and the
 five orchestrated pipeline steps (\S\ref{sec:methods}), summed across all
 domains, for each Text2KGBench condition reported in
-\S\ref{sec:results-text2kgbench}--\S\ref{sec:results-dbpedia}.
+\S\ref{sec:results-text2kgbench}.
 % Table~\ref{tab:appendix-tokens-mine} reports the same breakdown for the
 % three MINE conditions in \S\ref{sec:results-mine}; the two gpt-oss-120b
 % rows there reuse a single shared extraction pass, since they differ only
@@ -1041,7 +1039,7 @@ all the same context relations. For example: "documentary film" is a kind of
 "film" -> split, never merge, regardless of how similar their contexts look.
 "movie" and "film" are just two names for the same thing, with no "kind of"
 relationship between them -> merge. Heavy context/relation overlap is expected
-and NORMAL for a specific type and its general type (a documentary film
+and NORMAL for a specific type and its generentitled pe (a documentary film
 participates in almost every relation "film" does) -- it is NOT by itself
 evidence for merging; the "kind of" test always takes priority over context
 similarity. When genuinely unsure whether two labels are identical or in a
