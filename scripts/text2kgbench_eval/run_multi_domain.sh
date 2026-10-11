@@ -73,6 +73,14 @@ fi
 
 MODEL_TAG="$(basename "$CONFIG" .yaml)"
 COMBINED_ID="_combined_$(IFS=_; echo "${IDS[*]}")"
+# Concatenating every ontology id overflows the filesystem's 255-byte
+# filename limit once enough domains are passed (DBpedia-WebNLG's 19 does;
+# Wikidata-TekGen's 10 happens to fit) -- fall back to a short, deterministic
+# id (domain count + hash of the exact id list) so two different id sets of
+# the same length never collide.
+if [[ ${#COMBINED_ID} -gt 150 ]]; then
+  COMBINED_ID="_combined_${#IDS[@]}domains_$(printf '%s' "${IDS[*]}" | md5sum | cut -c1-10)"
+fi
 
 source venv/bin/activate
 

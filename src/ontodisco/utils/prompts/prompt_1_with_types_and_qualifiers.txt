@@ -21,6 +21,12 @@ These rules apply equally to main triplets and to qualifiers:
 - Use one name per thing (prefer singular) so an entity recurs across statements instead of appearing once.
 - Relations are short, reusable Wikidata-style predicates -- "employer" / "start time", never a phrase
   lifted from the sentence like "went on to teach at" / "starting in".
+- A sentence can share ONE predicate across MULTIPLE subjects or objects
+  (e.g. "X such as A and B", "A and B are both Y") -- emit a SEPARATE
+  triplet for EVERY member, never just the first or most salient one.
+- A sentence often packs more than one fact into a subordinate clause
+  (participial phrase, appositive, relative clause) IN ADDITION to its main
+  clause -- extract a separate triplet for each clause, not only the main one.
 
 ### Output Format
 Return only triplets in **JSON format** as a list of dictionaries, where each dictionary contains:

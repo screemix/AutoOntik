@@ -11,9 +11,9 @@ output_dir: "./output"
 
 # ── LLM client ────────────────────────────────────────────────────────────────
 llm:
-  model: "Qwen/Qwen3-Next-80B-A3B-Instruct"
-  api_key_env: "AIRI_KEY"       # name of the env var holding the key -- never put the key itself here
-  base_url: "https://inference.airi.net:46783/v1"
+  model: "qwen/qwen3-next-80b-a3b-instruct"
+  api_key_env: "OPENROUTER_KEY"       # name of the env var holding the key -- never put the key itself here
+  base_url: "https://openrouter.ai/api/v1"
 
 # ── Embedding client ──────────────────────────────────────────────────────────
 embedding:

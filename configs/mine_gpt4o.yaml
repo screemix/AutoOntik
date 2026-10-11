@@ -1,0 +1,69 @@
+# configs/mine_gpt4o.yaml
+#
+# MINE benchmark, gpt-4o via OpenRouter -- full pipeline (fresh extraction
+# included), same tuned settings as configs/mine_gpt41.yaml/mine_gptoss.yaml,
+# differing only in which LLM runs every step (extraction, canonicalization,
+# hierarchy induction, entity dedup, constraints). gpt-4o is the model
+# wikontic's own kg-gen MINE results (experiments/MINE/results/wikontic_gpt4o)
+# and its judge were both built with -- this run isolates "same model
+# throughout, including extraction" as a third arm alongside gpt-oss-120b
+# (configs/mine_gptoss.yaml) and gpt-4.1 (configs/mine_gpt41.yaml). No
+# wikidata seeding here -- plain baseline, matching mine_gpt41.yaml's own
+# no-seed arm for a clean one-variable comparison.
+
+corpus_id: "mine_gpt4o"
+input_path: "./data/mine/triplets_gpt4o_v2.jsonl"
+output_dir: "./output/mine"
+language: "en"
+include_qualifiers: true
+
+llm:
+  model: "openai/gpt-4o"
+  api_key_env: "OPENROUTER_KEY"
+  base_url: "https://openrouter.ai/api/v1"
+
+embedding:
+  contriever_model: "facebook/contriever"
+  device: null
+  embed_batch_size: 64
+
+relation_canonicalization:
+  similarity_threshold: 0.75
+  max_merge_rounds: 5
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+type_canonicalization:
+  hac_threshold: 0.75
+  relation_context_top_k: 5
+  max_merge_rounds: 5
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+hierarchy:
+  relation_signature_weighting: "ppmi"
+  weeds_containment_threshold: 0.75
+  priority_band_tolerance: 10
+  seed_roots: []
+  candidate_batch_size: 50      # cap on a level's size AND the trigger threshold for regrouping it
+  max_regroup_input: 90
+  max_regroup_rounds: 3
+  label_collision_threshold: 0.90
+  max_child_claim_share: 0.6
+  max_depth: 50
+  embed_batch_size: 64
+  context_max_examples: 10      # real corpus entity examples shown per type
+  context_max_subclasses: 5     # already-placed subclasses shown per type
+  max_parallel_workers: 8
+
+entity_canonicalization:
+  similarity_threshold: 0.85
+  max_merge_rounds: 5
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+constraints:
+  hard_threshold: 0.90
+  soft_threshold: 0.50
+  hint_threshold: 0.20
+  min_support_for_hard: 3

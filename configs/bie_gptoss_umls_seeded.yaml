@@ -25,7 +25,7 @@ include_qualifiers: true
 llm:
   model: "Openai/Gpt-oss-120b"
   api_key_env: "AIRI_KEY"
-  base_url: "https://inference.airi.net:46783/v1"
+  base_url: "https://inference.airi.net/v1"
   proxy_key_env: "PROXY_URL"
 
 embedding:

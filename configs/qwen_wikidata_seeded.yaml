@@ -13,7 +13,7 @@ output_dir: "./output"
 llm:
   model: "Qwen/Qwen3-Next-80B-A3B-Instruct"
   api_key_env: "AIRI_KEY"       # name of the env var holding the key -- never put the key itself here
-  base_url: "https://inference.airi.net:46783/v1"
+  base_url: "https://inference.airi.net/v1"
 
 # ── Embedding client ──────────────────────────────────────────────────────────
 embedding:

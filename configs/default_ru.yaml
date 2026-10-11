@@ -19,7 +19,7 @@ output_dir: "./output"
 llm:
   model: "Sber/GigaChat3.5-432B-A28B"
   api_key_env: "AIRI_KEY"       # name of the env var holding the key -- never put the key itself here
-  base_url: "https://inference.airi.net:46783/v1"
+  base_url: "https://inference.airi.net/v1"
   proxy_key_env: null            # optional: name of the env var holding an HTTP(S) proxy URL, used for
                                   # every LLM call this pipeline makes (extraction + all 5 steps); null
                                   # (default) means no proxy -- a direct connection to base_url

@@ -1,0 +1,69 @@
+# configs/mine_gpt41_wikidata.yaml
+#
+# Combines the two independently-tested improvements: gpt-4.1 extraction
+# (configs/mine_gpt41.yaml -- fixed most of the Step-0 recall gap vs
+# gpt-oss-120b) and the Wikidata 2-level seed hierarchy
+# (configs/seeds/wikidata.yaml, as used in configs/mine_gptoss_wikidata.yaml
+# -- on its own, on top of gpt-oss extraction, this moved accuracy by only
+# +/-1pt, within noise). Reuses the already-extracted gpt-4.1 triplets
+# (data/mine/triplets_gpt41.jsonl) -- seeding only affects hierarchy
+# induction, not extraction, so no need to re-run Step 0.
+#
+# Otherwise identical tuned settings to configs/mine_gpt41.yaml.
+
+corpus_id: "mine_gpt41_wikidata"
+input_path: "./data/mine/triplets_gpt41.jsonl"
+output_dir: "./output/mine"
+language: "en"
+include_qualifiers: true
+
+llm:
+  model: "openai/gpt-4.1"
+  api_key_env: "OPENROUTER_KEY"
+  base_url: "https://openrouter.ai/api/v1"
+
+embedding:
+  contriever_model: "facebook/contriever"
+  device: null
+  embed_batch_size: 64
+
+relation_canonicalization:
+  similarity_threshold: 0.75
+  max_merge_rounds: 5
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+type_canonicalization:
+  hac_threshold: 0.75
+  relation_context_top_k: 5
+  max_merge_rounds: 5
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+hierarchy:
+  relation_signature_weighting: "ppmi"
+  weeds_containment_threshold: 0.75
+  priority_band_tolerance: 10
+  seed_roots_path: "./configs/seeds/wikidata.yaml"   # resolved by run_pipeline() at run time
+  candidate_batch_size: 50      # cap on a level's size AND the trigger threshold for regrouping it
+  max_regroup_input: 90
+  max_regroup_rounds: 3
+  label_collision_threshold: 0.90
+  max_child_claim_share: 0.6
+  max_depth: 50
+  embed_batch_size: 64
+  context_max_examples: 10      # real corpus entity examples shown per type
+  context_max_subclasses: 5     # already-placed subclasses shown per type
+  max_parallel_workers: 8
+
+entity_canonicalization:
+  similarity_threshold: 0.85
+  max_merge_rounds: 5
+  max_parallel_workers: 8
+  max_cluster_size: 40
+
+constraints:
+  hard_threshold: 0.90
+  soft_threshold: 0.50
+  hint_threshold: 0.20
+  min_support_for_hard: 3
