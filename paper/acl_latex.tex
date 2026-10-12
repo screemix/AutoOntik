@@ -237,14 +237,17 @@ This design keeps each decision focused on a bounded part of the hierarchy, redu
 % \paragraph{Priority queue.} Every canonical type in $\mathcal{T}^*$ is
 % represented by a relation-argument profile, PPMI-weighted by default. A
 % one-shot pass based on the Weeds precision containment measure
-% \citep{weeds2004characterising} computes
-% for every type $u$, an in-degree score counting how many other types $v$
-% look containable within it:
+% \citep{weeds2004characterising} computes, for every type $u$, an in-degree
+% score counting how many other types $v$ look containable within it. Each
+% unordered pair $\{u,v\}$ that clears the containment threshold casts
+% exactly one vote, to whichever direction is the stronger containment --
+% split evenly only on an exact tie -- rather than letting both directions
+% accrue independently:
 % \begin{equation}
 %   \label{eq:weeds-indeg}
-%   \mathrm{deg_{in}}(u) = \bigl| \{\, v \neq u : \mathrm{WeedsPrec}(v, u) \geq
-%   \tau \,\} \bigr|.
-%   \\
+%   \mathrm{deg_{in}}(u) = \bigl| \{\, v \neq u :
+%   \max(\mathrm{WeedsPrec}(u,v), \mathrm{WeedsPrec}(v,u)) \geq \tau
+%   \ \text{and}\ \mathrm{WeedsPrec}(v,u) \geq \mathrm{WeedsPrec}(u,v) \,\} \bigr|.
 % \end{equation}
 % $\mathrm{WeedsPrec}(v, u)$ is the fraction of $v$'s relation-argument weight that $u$
 % also exhibits:
@@ -288,12 +291,12 @@ This design keeps each decision focused on a bounded part of the hierarchy, redu
 %   otherwise.
 % \end{itemize}
 
-Figure~\ref{fig:hierarchy-steps} demonstrates populating $\mathcal{H*}$, one placement decision per step.
+Figure~\ref{fig:hierarchy-steps} traces all eight placement decisions from populating $\mathcal{H*}$ on a toy vocabulary.
 
 \begin{figure*}[t]
 \centering
 \includegraphics[width=\textwidth]{hierarchy_induction.pdf}
-\caption{Hierarchy induction on a film-domain vocabulary, one placement decision per step, routed through the two-call PARENT CHECK / CHILD CHECK procedure plus capacity-triggered regrouping (\S\ref{sec:hierarchy-induction}). (a) The initial priority ranking. (b)-(c) The first two nodes settle, with \emph{documentary film}'s PARENT CHECK matching \emph{audiovisual work} directly -- too shallow, since \emph{film} does not exist yet. (d) Once \emph{film} is placed, its own PARENT CHECK matches \emph{audiovisual work} and its CHILD CHECK matches \emph{documentary film}: the earlier edge is removed and \emph{documentary film} is reattached beneath \emph{film}. (e) \emph{movie}'s PARENT CHECK matches \emph{film} with \texttt{same\_concept=true}, so the two \textbf{merge}. (f)-(g) \emph{war film} and \emph{action film} each fail both checks against film's existing children and settle as plain siblings -- no shared parent is invented at this scale, since synthesis is never a per-pair judgment. (h) When \emph{biographical film} descends to \emph{film}'s level, it finds 3 existing children, exceeding the candidate batch size $B$: this \textbf{capacity overflow}, not any single pairwise comparison, triggers a regrouping call that groups the true siblings \emph{war film} and \emph{action film} under a newly synthesized \emph{genre film}, leaving \emph{documentary film} out. (i) Only after regrouping does \emph{biographical film} run its own PARENT CHECK, matching \emph{documentary film}, giving the final tree.}
+\caption{All eight placement decisions from a toy film-domain run, routed through the two-call PARENT CHECK / CHILD CHECK procedure plus capacity-triggered regrouping (\S\ref{sec:hierarchy-induction}). Steps 1--2 and 5--6 are routine: each type settles as a new root or a plain sibling, with no structural surprise. Step 3: once \emph{film} is placed, its PARENT CHECK matches \emph{audiovisual work} and its CHILD CHECK matches \emph{documentary film}, so the earlier edge is removed and \emph{documentary film} is reattached beneath \emph{film}. Step 4: \emph{movie}'s PARENT CHECK matches \emph{film} with \texttt{same\_concept=true}, so the two merge. Step 7: when \emph{biographical film} descends to \emph{film}'s level, it finds 3 existing children -- exceeding the candidate batch size $B$ -- so a regrouping call (not any single pairwise comparison) fires first, grouping the true siblings \emph{war film} and \emph{action film} under a newly synthesized \emph{genre film}. Step 8: \emph{biographical film} then runs its own checks against the regrouped level and settles under \emph{documentary film}, giving the final tree.}
 \label{fig:hierarchy-steps}
 \end{figure*}
 
@@ -341,11 +344,9 @@ group. Within each such partition, merging then follows the round-based procedur
 
 % \paragraph{Stage 3: confidence scoring.} Triplets are regrouped by their
 % resolved, direction-corrected (domain signature, range signature) pair, and
-% we compute a partial-completeness-assumption (PCA) style confidence
-% \citep{galarraga2013amie} for each pair as its joint support over the
+% we score each pair by its support ratio -- its joint support over the
 % relation's total triplet count:
 % \begin{equation}
-%   \label{eq:pca-confidence}
 %   \mathrm{conf}(r, T_d, T_r) = \frac{\mathrm{support}(r, T_d,
 %   T_r)}{\mathrm{total}(r)}.
 % \end{equation}
@@ -361,12 +362,12 @@ considered independently. We compute the exact lowest common ancestor (LCA) of o
 
 For each canonical relation, domain and range types are considered independently. We compute the exact lowest common ancestor (LCA) of observed types in $\mathcal{H}^*$. If observations span disconnected roots, they are partitioned by root and an LCA is computed within each partition, yielding multiple domain/range signatures when a relation connects unrelated type families.
 
-Finally, triplets are grouped by their direction-corrected $(T_d,T_r)$ signature, and a PCA-style confidence \citep{galarraga2013amie} is computed as
+Finally, triplets are grouped by their direction-corrected $(T_d,T_r)$ signature, and each signature is scored by a confidence equal to the share of relation $r$'s own triplets it accounts for:
 \begin{equation}
 \mathrm{conf}(r,T_d,T_r)=
 \frac{\mathrm{support}(r,T_d,T_r)}{\mathrm{total}(r)}.
 \end{equation}
-Constraints are assigned \textsc{Hard}, \textsc{Soft}, or \textsc{Hint} strength according to thresholds $\tau_{\mathrm{hard}}$, $\tau_{\mathrm{soft}}$, and $\tau_{\mathrm{hint}}$.
+A relation's triplets typically concentrate on one dominant signature, with noisier alternatives -- extraction error, genuinely rarer usage -- trailing far behind; this ratio is exactly what separates the two. Constraints are assigned \textsc{Hard}, \textsc{Soft}, or \textsc{Hint} strength by thresholding it at $\tau_{\mathrm{hard}}$, $\tau_{\mathrm{soft}}$, and $\tau_{\mathrm{hint}}$.
 % \section{KG Retrieval and QA}
 % TODO -- not yet written.
 
@@ -420,6 +421,10 @@ Gold triples are matched from the reference side outward, specifically so that a
 
 \textbf{{Domain/Range Type Matching}}. For every matched pair, we compare the types that AutoOntic assigned to the extracted triple's subject and object with the gold relation's declared domain and range classes. The domain and range are swapped when the match direction is \emph{inverse}. A second LLM judge classifies each side as \textsc{Exact} (synonymous types), \textsc{More General} (AutoOntic's type is a broader category that subsumes the gold type), \textsc{More Narrow} (AutoOntic's type is a subtype of the gold type), or \textsc{Not Related}. We report the resulting \emph{type-judgment distribution} over matched pairs, with domain and range sides considered independently. This distinction is important because \textsc{More General} and \textsc{More Narrow} represent different failure modes of hierarchy induction: over-flattening versus over-fragmentation.
 % any triple whose judge call failed outright (\S\ref{sec:eval-reliability}).
+
+\textbf{Constraint Plausibility}. The two evaluations above score \emph{instances}: a single matched triple's extracted types against gold. Neither touches the output of constraint induction (\S\ref{sec:constraints}) itself -- the per-relation domain/range \emph{constraint} $(T_d, T_r)$, generalized via LCA over every triple observed for that relation, that a downstream consumer would actually use for retrieval or structural validation. For every matched pair, we additionally select the constraint whose $(T_d, T_r)$ the pair's direction-corrected types fall under (a relation spanning disconnected hierarchy partitions may carry more than one), and compare that constraint, again swapped on \emph{inverse}, against the same gold domain/range class using the identical Exact/More General/More Narrow/Not Related judge. This is deliberately the same rubric and the same per-matched-pair loop as Domain/Range Type Matching, not a new instrument: the two distributions are directly comparable, and where they diverge -- e.g.\ instance-level matches skewing \textsc{Exact} while the relation's own mined constraint skews \textsc{More General} -- the divergence isolates granularity loss specifically in the LCA generalization step rather than in per-instance typing. We report every candidate constraint a matched pair selects, regardless of the \textsc{Hard}/\textsc{Soft}/\textsc{Hint} strength tier it would receive (\S\ref{sec:constraints}) or whether it clears $\tau_{\text{hint}}$ at all, alongside its support and confidence, so low-confidence constraints are not silently excluded from the comparison. We additionally run a free, non-LLM containment check on every matched pair: by construction, a constraint's $(T_d, T_r)$ must be an ancestor-or-equal of the very instances that fed its LCA computation, so this should always hold; we report its violation rate separately, as a pipeline-correctness diagnostic rather than a semantic result, since a nonzero rate indicates a bug rather than a real granularity mismatch.
+
+This evaluation has no direct precedent on Text2KGBench or elsewhere. Text2KGBench's own Ontology Conformance metric checks only relation-vocabulary membership and explicitly leaves domain/range validation as future work \citep{mihindukulasooriya2023text2kgbench}. Our closest related system, Wikontic, reports a single binary ontology-misalignment rate \citep{chepurova2026wikontic}, which is the right instrument when induced types are mapped directly onto Wikidata's own schema but not when comparing a schema-free, corpus-grown hierarchy against an independently-curated reference ontology that was never built to match its granularity -- exactly the condition the graded rubric above exists to handle. Recent LLM-based taxonomy induction work \citep{zhang2026sparrow} evaluates induced hierarchies with Node/Edge/Ancestor F1, exact per-edge correctness against a gold taxonomy with no relations or domain/range at all, collapsing a slightly-too-general placement and a wholly unrelated one into the same ``wrong'' outcome. Constraint Plausibility extends our own instance-level rubric to the one artifact none of these evaluate: the mined constraint itself.
 
 % \paragraph{Direction breakdown} reports the proportion of matches
 % classified \emph{same} versus \emph{inverse}, doubling as an indirect

@@ -106,6 +106,8 @@ from pathlib import Path
 
 from src.ontodisco.utils.dedup_base import normalize_label
 from src.ontodisco.utils.openai_utils import LLMTripletExtractor
+from src.ontodisco.relation_dedup import update_relation_type_map
+from src.ontodisco.constraints import ConstraintConfig, induce_constraints
 
 from scripts.text2kgbench_eval.ontology import Text2KGOntology, parse_ontology
 
@@ -148,11 +150,34 @@ def _load_jsonl(path: str) -> list[dict]:
     return rows
 
 
-def _resolve_type_label(raw_type: str, type_vocab) -> str | None:
+def _resolve_type(raw_type: str, type_vocab) -> tuple[str | None, str | None]:
+    """Returns (type_id, canonical_label), mirroring _resolve_relation_label.
+    The id is needed for Constraint Plausibility's ancestor lookups in
+    TypeHierarchy; the label is what the existing Domain/Range Type
+    Matching judge call already consumes."""
     type_id = type_vocab.surface_to_id.get(normalize_label(raw_type)) or type_vocab.surface_to_id.get(raw_type)
     if not type_id:
-        return None
-    return type_vocab.items[type_id].canonical_label
+        return None, None
+    return type_id, type_vocab.items[type_id].canonical_label
+
+
+def _is_ancestor_or_equal(candidate_ancestor_id: str, node_id: str, hierarchy) -> bool:
+    """True iff candidate_ancestor_id is node_id itself or one of its
+    ancestors in hierarchy's single-parent is-a chain. Used both to SELECT
+    which constraint signature a matched pair's types fall under, and as
+    the free containment sanity check (see Constraint Plausibility, module
+    docstring) -- which should always return True by construction, since a
+    constraint's (domain,range) is the LCA over exactly the triples that
+    fed it, including -- assuming no pipeline bug -- this one."""
+    current = node_id
+    seen = set()
+    while current is not None and current not in seen:
+        if current == candidate_ancestor_id:
+            return True
+        seen.add(current)
+        parents = hierarchy.parents.get(current)
+        current = parents[0] if parents else None
+    return False
 
 
 def _resolve_relation_label(raw_relation: str, relation_vocab) -> tuple[str | None, str | None]:
@@ -182,13 +207,14 @@ def build_sentence_buckets(triplets: list[dict], relation_vocab, type_vocab) -> 
             continue
 
         relation_id, relation_label = _resolve_relation_label(raw_relation, relation_vocab)
-        subject_type_label = _resolve_type_label(raw_subject_type, type_vocab) if raw_subject_type else None
-        object_type_label = _resolve_type_label(raw_object_type, type_vocab) if raw_object_type else None
+        subject_type_id, subject_type_label = _resolve_type(raw_subject_type, type_vocab) if raw_subject_type else (None, None)
+        object_type_id, object_type_label = _resolve_type(raw_object_type, type_vocab) if raw_object_type else (None, None)
 
         buckets[sentence_id].append({
             "subject": raw_subject, "relation": raw_relation, "object": raw_object,
             "relation_id": relation_id, "relation_label": relation_label,
-            "subject_type_label": subject_type_label, "object_type_label": object_type_label,
+            "subject_type_id": subject_type_id, "subject_type_label": subject_type_label,
+            "object_type_id": object_type_id, "object_type_label": object_type_label,
         })
 
     if n_dropped:
@@ -197,12 +223,52 @@ def build_sentence_buckets(triplets: list[dict], relation_vocab, type_vocab) -> 
     return dict(buckets)
 
 
+def build_constraint_index(constraints: list) -> dict[str, list]:
+    """relation_id -> every RelationConstraint for it (any strength tier,
+    including BELOW_HINT when induce_constraints was called with
+    include_below_threshold=True -- see Constraint Plausibility, module
+    docstring: we score every candidate signature a matched pair might
+    select, not just the ones that cleared hint_threshold)."""
+    index: dict[str, list] = defaultdict(list)
+    for c in constraints:
+        index[c.relation_id].append(c)
+    return dict(index)
+
+
+def _select_constraint(relation_id, subject_type_id, object_type_id, constraint_index, hierarchy):
+    """The constraint for relation_id whose (domain_type_id, range_type_id)
+    both contain (ancestor-or-equal) this pair's own types -- see
+    _is_ancestor_or_equal. A relation spanning disconnected hierarchy
+    partitions can carry several constraints; this picks the one the
+    pair's own types actually witness, not an arbitrary one. Returns
+    (constraint, containment_ok) -- containment_ok is the free sanity
+    check (expected True always; see module docstring)."""
+    candidates = constraint_index.get(relation_id, [])
+    if not candidates or not subject_type_id or not object_type_id:
+        return None, None
+    for c in candidates:
+        domain_ok = _is_ancestor_or_equal(c.domain_type_id, subject_type_id, hierarchy)
+        range_ok = _is_ancestor_or_equal(c.range_type_id, object_type_id, hierarchy)
+        if domain_ok and range_ok:
+            return c, True
+    # No stored signature contains this pair -- either a true pipeline bug
+    # (constraint computed over a different triplet set than this matched
+    # instance), or the relation legitimately has zero candidates (shouldn't
+    # happen if constraint_index was built with include_below_threshold=True
+    # and this relation has at least one resolvable triplet). Return the
+    # first candidate anyway so the containment violation is visible rather
+    # than silently treated as "no constraint".
+    return candidates[0], False
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Per-sentence matching + type judging
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _judge_sentence(
     record: dict, bucket: list[dict], ontology: Text2KGOntology, extractor: LLMTripletExtractor,
+    constraint_index: dict | None = None, hierarchy=None, type_label_by_id: dict | None = None,
+    direction_by_relation: dict | None = None,
 ) -> dict:
     """Match every gold triple for one sentence against the (mutable) bucket
     of generated triples for that sentence, consuming a candidate once
@@ -259,6 +325,63 @@ def _judge_sentence(
                 call_failures += 1
                 type_judgment = {"domain": None, "range": None, "judge_call_failed": True}
 
+        # ── Constraint Plausibility (Track B): same rubric, different
+        # comparison target -- the relation's MINED CONSTRAINT against gold,
+        # not this instance's own assigned type against gold (that's Track
+        # A above). See module docstring. Selection uses the pair's own
+        # (un-swapped) types; the swap-on-inverse applies to GOLD's side,
+        # exactly mirroring Track A's swap, so both tracks share one
+        # direction convention. ──
+        constraint_judgment = {"domain": None, "range": None}
+        constraint_info = None
+        if constraint_index is not None and hierarchy is not None:
+            # The constraint's own (domain,range) is stored in the canonical
+            # relation's direction-CORRECTED forward sense (induce_constraints'
+            # internal _apply_direction). This triple's raw surface form may
+            # itself be the inverted one (e.g. "served by" vs. canonical
+            # "serves") -- apply the SAME per-surface-form correction before
+            # selecting/containment-checking, exactly mirroring
+            # constraints.py's _apply_direction, or every triple extracted via
+            # an inverted surface form spuriously fails containment.
+            surface_direction = (direction_by_relation or {}).get(
+                matched_entry["relation_id"], {}
+            ).get(normalize_label(matched_entry["relation"]), "forward")
+            if surface_direction == "inverted":
+                subj_for_constraint = matched_entry["object_type_id"]
+                obj_for_constraint = matched_entry["subject_type_id"]
+            else:
+                subj_for_constraint = matched_entry["subject_type_id"]
+                obj_for_constraint = matched_entry["object_type_id"]
+            constraint, containment_ok = _select_constraint(
+                matched_entry["relation_id"], subj_for_constraint,
+                obj_for_constraint, constraint_index, hierarchy,
+            )
+            if constraint is not None:
+                if direction == "inverse":
+                    gold_domain_for_c, gold_range_for_c = gold_range, gold_domain
+                else:
+                    gold_domain_for_c, gold_range_for_c = gold_domain, gold_range
+                c_domain_label = (type_label_by_id or {}).get(constraint.domain_type_id)
+                c_range_label = (type_label_by_id or {}).get(constraint.range_type_id)
+                c_domain_pair = (c_domain_label, gold_domain_for_c) if (c_domain_label and gold_domain_for_c) else None
+                c_range_pair = (c_range_label, gold_range_for_c) if (c_range_label and gold_range_for_c) else None
+                if c_domain_pair or c_range_pair:
+                    try:
+                        constraint_judgment = extractor.compare_types_with_llm(c_domain_pair, c_range_pair)
+                    except Exception:
+                        logger.exception("compare_types_with_llm (constraint) failed for sentence %s, gold triple %r",
+                                          record["id"], gold)
+                        call_failures += 1
+                        constraint_judgment = {"domain": None, "range": None, "judge_call_failed": True}
+                constraint_info = {
+                    "relation_id": constraint.relation_id,
+                    "domain_type_id": constraint.domain_type_id, "range_type_id": constraint.range_type_id,
+                    "domain_type_label": c_domain_label, "range_type_label": c_range_label,
+                    "support": constraint.support, "total": constraint.total,
+                    "pca_confidence": constraint.pca_confidence, "strength": constraint.strength.value,
+                    "containment_ok": containment_ok,
+                }
+
         gold_results.append({
             "gold": gold, "matched": True, "direction": direction,
             "generated": {
@@ -269,6 +392,8 @@ def _judge_sentence(
             },
             "gold_domain": gold_domain, "gold_range": gold_range,
             "type_judgment": type_judgment,
+            "constraint": constraint_info,
+            "constraint_judgment": constraint_judgment,
         })
 
     return {
@@ -302,12 +427,12 @@ def summarize(results: list[dict], total_generated: int, *, ontology_id, judge_m
     inverse_count = sum(1 for g in matched if g["direction"] == "inverse")
     total_extras = sum(len(r["extras"]) for r in results)
 
-    def _label_distribution(side: str) -> dict:
+    def _label_distribution(side: str, judgment_key: str = "type_judgment") -> dict:
         dist = {label: 0 for label in TYPE_JUDGE_LABELS}
         dist["no_gold_type"] = 0
         dist["judge_call_failed"] = 0
         for g in matched:
-            tj = g["type_judgment"]
+            tj = g[judgment_key]
             if tj.get("judge_call_failed"):
                 dist["judge_call_failed"] += 1
                 continue
@@ -317,6 +442,13 @@ def summarize(results: list[dict], total_generated: int, *, ontology_id, judge_m
             else:
                 dist["no_gold_type"] += 1
         return dist
+
+    # ── Constraint Plausibility (Track B) aggregates ──────────────────────
+    with_constraint = [g for g in matched if g.get("constraint") is not None]
+    containment_violations = [g for g in with_constraint if g["constraint"]["containment_ok"] is False]
+    strength_counts: dict[str, int] = defaultdict(int)
+    for g in with_constraint:
+        strength_counts[g["constraint"]["strength"]] += 1
 
     return {
         "ontology_id": ontology_id,
@@ -333,6 +465,12 @@ def summarize(results: list[dict], total_generated: int, *, ontology_id, judge_m
         "extra_rate": total_extras / total_generated if total_generated else None,
         "domain_type_judgment_distribution": _label_distribution("domain"),
         "range_type_judgment_distribution": _label_distribution("range"),
+        "constraint_domain_judgment_distribution": _label_distribution("domain", "constraint_judgment"),
+        "constraint_range_judgment_distribution": _label_distribution("range", "constraint_judgment"),
+        "constraint_matched_pairs_with_constraint": len(with_constraint),
+        "constraint_matched_pairs_without_constraint": len(matched) - len(with_constraint),
+        "constraint_containment_violations": len(containment_violations),
+        "constraint_strength_tier_counts": dict(strength_counts),
     }
 
 
@@ -418,6 +556,19 @@ def main():
     parser.add_argument("--judge-api-key-env", default="OPENROUTER_KEY",
                          help="Env var holding the judge LLM's API key.")
     parser.add_argument("--max-workers", type=int, default=8)
+    parser.add_argument("--constraint-plausibility", action="store_true",
+                         help="Also run Constraint Plausibility (Track B, see module docstring): "
+                              "for every matched pair, select the relation's mined domain/range "
+                              "constraint (recomputed here with include_below_threshold=True so "
+                              "no candidate is excluded) and judge it against gold with the same "
+                              "rubric Domain/Range Type Matching already uses. Needs "
+                              "hierarchy_induction.pkl in the checkpoint dir (relation_dedup.pkl / "
+                              "type_dedup.pkl are already required either way) and re-runs relation "
+                              "direction classification (one LLM call per canonical relation, using "
+                              "--judge-model/--judge-base-url/--judge-api-key-env -- the judge "
+                              "model, not the pipeline's own backbone, since this is pure "
+                              "evaluation-time recomputation of a symbolic LCA, not a rebuild of "
+                              "the KG itself).")
     args = parser.parse_args()
 
     if args.checkpoints_dir:
@@ -455,6 +606,33 @@ def main():
         raise RuntimeError(f"Environment variable {args.judge_api_key_env!r} is not set")
     extractor = LLMTripletExtractor(api_key=api_key, model=args.judge_model, base_url=args.judge_base_url)
 
+    constraint_index = None
+    hierarchy = None
+    type_label_by_id = None
+    direction_by_relation = None
+    if args.constraint_plausibility:
+        logger.info("=== Constraint Plausibility enabled: loading hierarchy, recomputing constraints "
+                     "(include_below_threshold=True) ===")
+        hierarchy_result = _load_pickle(run_dir / "hierarchy_induction.pkl")
+        hierarchy = hierarchy_result.hierarchy
+
+        type_label_by_id = {tid: item.canonical_label for tid, item in type_vocab.items.items()}
+        for st in hierarchy_result.synthesized_types:
+            type_label_by_id.setdefault(st.type_id, st.canonical_label)
+
+        # update_relation_type_map is NOT idempotent (see pipeline.py) --
+        # relation_dedup.pkl is checkpointed BEFORE this bridge runs in the
+        # original pipeline, so it must be (re-)applied here exactly once.
+        relation_vocab_for_constraints = update_relation_type_map(relation_vocab, type_vocab)
+        constraints, direction_by_relation = induce_constraints(
+            triplets=triplets, type_vocab=type_vocab, relation_vocab=relation_vocab_for_constraints,
+            hierarchy=hierarchy, llm_extractor=extractor, config=ConstraintConfig(),
+            include_below_threshold=True,
+        )
+        constraint_index = build_constraint_index(constraints)
+        logger.info("Constraint index: %d candidate signatures across %d relations",
+                    len(constraints), len(constraint_index))
+
     output_path = Path(args.output)
     loaded = _load_existing_results(output_path)
     # A sentence that hit call failures (e.g. every remaining call failing
@@ -484,7 +662,8 @@ def main():
     if tasks:
         with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
             futures = {
-                executor.submit(_judge_sentence, record, bucket, ontology, extractor): record["id"]
+                executor.submit(_judge_sentence, record, bucket, ontology, extractor,
+                                 constraint_index, hierarchy, type_label_by_id, direction_by_relation): record["id"]
                 for record, bucket, ontology in tasks
             }
             completed = 0
@@ -525,6 +704,20 @@ def main():
         logger.info("  %s: recall=%s (%d/%d gold matched)",
                     ontology_id, f"{r:.2%}" if r is not None else "N/A",
                     s["matched_same_direction"] + s["matched_inverse_direction"], s["total_gold_triples"])
+
+    if args.constraint_plausibility:
+        logger.info(
+            "Constraint Plausibility: %d/%d matched pairs had an applicable constraint "
+            "(%d did not), %d containment violation(s) [should be 0 -- see module docstring]. "
+            "Domain distribution: %s. Range distribution: %s.",
+            overall_summary["constraint_matched_pairs_with_constraint"],
+            overall_summary["constraint_matched_pairs_with_constraint"]
+                + overall_summary["constraint_matched_pairs_without_constraint"],
+            overall_summary["constraint_matched_pairs_without_constraint"],
+            overall_summary["constraint_containment_violations"],
+            overall_summary["constraint_domain_judgment_distribution"],
+            overall_summary["constraint_range_judgment_distribution"],
+        )
 
 
 if __name__ == "__main__":

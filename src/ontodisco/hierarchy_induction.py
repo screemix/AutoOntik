@@ -152,6 +152,13 @@ class SynthesizedType:
 
 @dataclass
 class HierarchyConfig:
+    skip: bool = False  # ablation: bypass induce_hierarchy() entirely and hand pipeline.py a flat
+                        # TypeHierarchy (every type its own root, no edges) -- see
+                        # pipeline.py's hierarchy step and flat_hierarchy_result() below. Downstream
+                        # steps need no special-casing: entity_dedup's _parent_key(type_id, hierarchy)
+                        # returns ("self", type_id) for every type when there are no parents, which
+                        # degrades its sibling-merge gate to "same type only" -- the correct "no
+                        # hierarchy benefit" baseline, not a crash or an empty hierarchy object.
     relation_signature_weighting: str = "ppmi"  # "ppmi" | "tfidf" | "raw" -- see relation_context.py
 
     # -- Priority queue / seeding --
@@ -266,6 +273,15 @@ class HierarchyInductionResult:
     # unresolved_children above -- a rarely-attested type is weak EVIDENCE,
     # not a non-existent type, and placing it against the main pool is what
     # let 'item' (ONE corpus mention) acquire 836 descendants.
+
+
+def flat_hierarchy_result(type_ids: list[str]) -> HierarchyInductionResult:
+    """The HierarchyConfig.skip=True ablation result: every type_id is its
+    own root, no edges at all. Used in place of induce_hierarchy()'s normal
+    LLM-driven placement -- see HierarchyConfig.skip's docstring for why
+    downstream steps need no special-casing for this."""
+    hierarchy = TypeHierarchy(edges=[], children={}, parents={}, roots=list(type_ids))
+    return HierarchyInductionResult(hierarchy=hierarchy)
 
 
 @dataclass

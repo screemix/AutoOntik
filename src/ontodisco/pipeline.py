@@ -75,6 +75,7 @@ from src.ontodisco.entity_dedup import EntityDeduplicationResult, deduplicate_en
 from src.ontodisco.hierarchy_induction import (
     HierarchyConfig,
     HierarchyInductionResult,
+    flat_hierarchy_result,
     induce_hierarchy,
 )
 from src.ontodisco.relation_dedup import (
@@ -470,6 +471,10 @@ def run_pipeline(config: PipelineConfig, *, resume: bool = False) -> OntoDiscoRe
     usage0 = llm_extractor.get_usage_snapshot()
     if resume and _has_checkpoint(run_dir, "hierarchy_induction"):
         hierarchy_result = _load_checkpoint(run_dir, "hierarchy_induction")
+    elif config.hierarchy.skip:
+        logger.info("=== Step: Hierarchy Induction SKIPPED (ablation: config.hierarchy.skip=True) ===")
+        hierarchy_result = flat_hierarchy_result(list(type_vocab.items.keys()))
+        _save_checkpoint(run_dir, "hierarchy_induction", hierarchy_result)
     else:
         logger.info("=== Step: Hierarchy Induction ===")
         hierarchy_result = induce_hierarchy(
@@ -532,7 +537,7 @@ def run_pipeline(config: PipelineConfig, *, resume: bool = False) -> OntoDiscoRe
         constraints_result = _load_checkpoint(run_dir, "constraints")
     else:
         logger.info("=== Step: Constraint Induction ===")
-        constraints_result = induce_constraints(
+        constraints_result, _direction_by_relation = induce_constraints(
             triplets=triplets,
             type_vocab=type_vocab,
             relation_vocab=relation_vocab,

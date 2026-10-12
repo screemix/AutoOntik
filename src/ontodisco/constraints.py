@@ -71,6 +71,10 @@ class ConstraintStrength(Enum):
     HARD = "hard"    # pca_confidence >= hard_threshold
     SOFT = "soft"     # pca_confidence >= soft_threshold
     HINT = "hint"     # pca_confidence >= hint_threshold
+    BELOW_HINT = "below_hint"  # pca_confidence < hint_threshold -- never returned unless the
+                                # caller passes induce_constraints(..., include_below_threshold=True);
+                                # every existing caller (pipeline.py, sandbox.py) keeps today's
+                                # behavior of discarding these entirely.
 
 
 @dataclass
@@ -311,7 +315,8 @@ def induce_constraints(
     hierarchy: "TypeHierarchy",
     llm_extractor,
     config: Optional[ConstraintConfig] = None,
-) -> list[RelationConstraint]:
+    include_below_threshold: bool = False,
+) -> tuple[list[RelationConstraint], dict[str, dict[str, str]]]:
     """
     Mine domain/range constraints for every canonical relation with at least
     one resolvable triplet.
@@ -327,10 +332,29 @@ def induce_constraints(
         hierarchy:     TypeHierarchy from hierarchy_induction.induce_hierarchy().
         llm_extractor: LLMTripletExtractor instance (classify_relation_direction()).
         config:        Confidence thresholds (see ConstraintConfig).
+        include_below_threshold: if True, also return every (domain, range)
+                       signature that did NOT clear hint_threshold, tagged
+                       ConstraintStrength.BELOW_HINT, instead of discarding
+                       them. Default False reproduces today's behavior
+                       exactly -- only set True for evaluation code that
+                       needs the full candidate pool (e.g. the Text2KGBench
+                       Constraint Plausibility judge), never for the
+                       pipeline's own run (pipeline.py, sandbox.py) where
+                       BELOW_HINT constraints would leak into downstream
+                       consumers that assume only kept tiers appear here.
 
     Returns:
-        RelationConstraints, one per (relation_id, domain, range) triple that
-        cleared hint_threshold. Multiple constraints per relation are allowed.
+        (constraints, direction_by_relation). constraints: RelationConstraints,
+        one per (relation_id, domain, range) triple that cleared
+        hint_threshold (or every candidate, if include_below_threshold=True);
+        multiple constraints per relation are allowed. direction_by_relation:
+        relation_id -> {normalized_surface_form: "forward"|"inverted"}, the
+        SAME per-surface-form correction already baked into every returned
+        constraint's own (domain,range) -- callers that need to compare a
+        SPECIFIC triple's own (uncorrected) types against a constraint, e.g.
+        Text2KGBench's Constraint Plausibility eval, must apply this same
+        correction to that triple first or containment will spuriously fail
+        for every triple extracted via a relation's inverted surface form.
     """
     if config is None:
         config = ConstraintConfig()
@@ -376,13 +400,15 @@ def induce_constraints(
             strength = _assign_strength(pca_confidence, config, support=support)
             if strength is None:
                 n_discarded += 1
-                logger.debug(
-                    "Discarding constraint: relation=%s domain=%s range=%s "
-                    "support=%d/%d (pca_confidence=%.2f below hint_threshold=%.2f)",
-                    relation_id, domain_type_id, range_type_id, support, total,
-                    pca_confidence, config.hint_threshold,
-                )
-                continue
+                if not include_below_threshold:
+                    logger.debug(
+                        "Discarding constraint: relation=%s domain=%s range=%s "
+                        "support=%d/%d (pca_confidence=%.2f below hint_threshold=%.2f)",
+                        relation_id, domain_type_id, range_type_id, support, total,
+                        pca_confidence, config.hint_threshold,
+                    )
+                    continue
+                strength = ConstraintStrength.BELOW_HINT
             constraints.append(RelationConstraint(
                 relation_id=relation_id,
                 domain_type_id=domain_type_id,
@@ -398,4 +424,4 @@ def induce_constraints(
         "(%d discarded below hint_threshold)",
         len(constraints), len(by_relation), n_discarded,
     )
-    return constraints
+    return constraints, direction_by_relation
