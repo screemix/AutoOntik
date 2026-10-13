@@ -146,7 +146,7 @@ reference-based protocol that classifies induced ontology types as exact, broade
 \begin{figure}[t]
 \centering
 \includegraphics[height=0.46\textheight,keepaspectratio]{pipeline_architecture.pdf}
-\caption{The AutoOntic pipeline. A schema-free LLM extractor (\S\ref{sec:extraction}) produces raw triplets $\mathcal{G}=(s,t_s,r,o,t_o,Q)$, canonicalized into a relation vocabulary $\mathcal{R}^*$ (\S\ref{sec:relation-dedup}) and a type vocabulary $\mathcal{T}^*$ organized into a single-parent is-a hierarchy $\mathcal{H}^*$(\S\ref{sec:type-dedup}). Entity mentions are then deduplicated using that hierarchy as a symbolic gate (\S\ref{sec:entity-dedup}), and domain/range constraints are mined by re-resolving $\mathcal{G}$ against $\mathcal{R}^*$, $\mathcal{T}^*$, and  $\mathcal{H}^*$(\S\ref{sec:constraints}). Colored dashed arrows mark additional direct inputs beyond the sequential chain.}
+\caption{The AutoOntic pipeline. A schema-free LLM extractor (\S\ref{sec:extraction}) produces a collection $\mathcal{G}$ of raw triplets $g=(s,t_s,r,o,t_o,Q)$, canonicalized into a relation vocabulary $\mathcal{R}^*$ (\S\ref{sec:relation-dedup}) and a type vocabulary $\mathcal{T}^*$ organized into a single-parent is-a hierarchy $\mathcal{H}^*$(\S\ref{sec:type-dedup}). Entity mentions are then deduplicated using that hierarchy as a symbolic gate (\S\ref{sec:hierarchy-induction}), and domain/range constraints are mined by re-resolving $\mathcal{G}$ against $\mathcal{R}^*$, $\mathcal{T}^*$, and  $\mathcal{H}^*$(\S\ref{sec:constraints}). Colored dashed arrows mark additional direct inputs beyond the sequential chain.}
 \label{fig:pipeline}
 \end{figure}
 
@@ -175,25 +175,36 @@ per-relation domain/range constraints mined from it. The system can also extend 
 % \label{sec:methods-overview}
 
 AutoOntic turns a textual corpus into a canonicalized, typed knowledge graph: a deduplicated relation vocabulary, a deduplicated and hierarchically organized entity-type vocabulary, a deduplicated entity vocabulary with class assignments, and a set of relation-level domain/range constraints (Figure~\ref{fig:pipeline}).
-At first, a schema-free LLM extractor  (\S\ref{sec:extraction}) produces a collection of raw triplets: 
+At first, a schema-free LLM extractor  (\S\ref{sec:extraction}) produces a collection $\mathcal{G}$ of raw triplets,
+each represented as:
 \begin{equation}
-\mathcal{G} = (s, t_s, r, o, t_o, Q),
+g = (s, t_s, r, o, t_o, Q),
 \end{equation}
-where $s$ -- subject entity, $t_s$ -- subject type, $r$ -- relation predicate, $o$ -- object entity, $t_o$ -- object type, and $Q$ -- an optional list of qualifiers extracted from texts~\citep{chepurova2026wikontic}. Then $\mathcal{G}$ is passed further for canonization and typing. Every downstream stage resolves fields into canonical identifiers, keeping each stage's data dependencies explicit and independently inspectable.
+where $s$ -- subject entity, $t_s$ -- subject type, $r$ -- relation predicate, $o$ -- object entity, $t_o$ -- object type, and $Q$ -- an optional list of qualifiers extracted from texts~\citep{chepurova2026wikontic}. Then $\mathcal{G}$ is passed further for canonicalization and typing. Every downstream stage resolves fields into canonical identifiers, keeping each stage's data dependencies explicit and independently inspectable.
 
-The pipeline runs ordered stages, described in
-\S\ref{sec:relation-dedup}--\S\ref{sec:constraints}:  \emph{(1) Initial typed triplet extraction}, \emph{(2) relation
-canonicalization}, \emph{(3) entity-type canonicalization}, which also
-induces a taxonomy hierarchy over the resulting type vocabulary,
-\emph{(4) entity class assignment and canonicalization}, and \emph{(5)
-domain/range constraint induction}. The ordering is dictated by data
-dependencies. Entity-type canonicalization is conditioned on the canonical relation vocabulary as a disambiguating signal. Entity deduplication runs after the type hierarchy because it uses the hierarchy as a symbolic gate for candidate synonyms. Constraint induction derives relation constraints directly from the extracted triplets and the outputs of the first two stages.
+% The pipeline runs ordered stages, described in
+% \S\ref{sec:relation-dedup}--\S\ref{sec:constraints}:  \emph{(1) Initial typed triplet extraction}, \emph{(2) relation
+% canonicalization}, \emph{(3) entity-type canonicalization}, which also
+% induces a taxonomy hierarchy over the resulting type vocabulary,
+% \emph{(4) entity class assignment and canonicalization}, and \emph{(5)
+% domain/range constraint induction}. The ordering is dictated by data
+% dependencies. Entity-type canonicalization is conditioned on the canonical relation vocabulary as a disambiguating signal. Entity deduplication runs after the type hierarchy because it uses the hierarchy as a symbolic gate for candidate synonyms. Constraint induction derives relation constraints directly from the extracted triplets and the outputs of the first two stages.
+
+The AutoOntic pipeline comprises six ordered stages:
+\emph{(1) typed triplet extraction, (2) relation canonicalization,
+(3) entity-type canonicalization, (4) hierarchy induction,
+(5) entity canonicalization and class assignment, and
+(6) domain/range constraint induction}.
+This ordering follows data dependencies: canonical relations inform
+type-label disambiguation; the induced type hierarchy constrains
+candidate entity merges; and the canonical vocabularies and
+direction-corrected triplets provide evidence for domain/range constraints.
 
 \paragraph{Shared canonicalization procedure.}
 \label{sec:reoccurring-design}
 The following design choices reoccur across stages. (1) Deduplication of synonymous surface forms is performed by clustering Contriever sentence embeddings \citep{izacard2022contriever} with HDBSCAN \citep{campello2013hdbscan} at a stage-specific cosine-similarity threshold $\theta$, and every merge/split decision is adjudicated by a single LLM call per candidate cluster. (2) Merging is done through several rounds: each round re-embeds the current pool, re-clusters it, and sends multi-member clusters to the LLM for verification, folding accepted merges back into the pool for the next round. The procedure repeats until the vocabulary size stops reducing or a configurable round limit $R$ is reached. (3) The result of each stage is checkpointed once it completes, allowing independent inspection of every stage's output and reuse in follow-up experiments. Every $\theta$ and $R$ instance below is stage-specific (relation, type, and entity deduplication each set their own); concrete values for these and every other hyperparameter introduced in \S\ref{sec:relation-dedup}--\S\ref{sec:constraints} are collected in Table~\ref{tab:hyperparams} (Appendix~\ref{sec:appendix-hyperparams}).
 
-\subsection{Initial Typed Triplet Extraction}
+\subsection{Typed Triplet Extraction}
 \label{sec:extraction}
 An LLM extracts subject--relation--object triplets enriched with subject/object types and contextual qualifiers with meta-information that cannot be expressed as a standalone triplet such as time, location, or condition. Types are initially unconstrained free text. Each extracted record has the form $g=(s,t_s,r,o,t_o,Q)$, where $s,o$ are entity mentions, $t_s,t_o$ their raw types, $r$ the relation, and $Q$ an optional qualifier list. The extracted records form $\mathcal{G}$. The full extraction prompt is given in Appendix~\ref{sec:appendix-prompts}, Listing~\ref{lst:extraction}.
 
@@ -205,11 +216,13 @@ $\mathcal{R}^*$. Candidate clusters are generated by embedding every raw
 relation surface form and clustering with HDBSCAN at similarity threshold
 $\theta_r$, as described in \S\ref{sec:reoccurring-design}. Every multi-member candidate cluster is then passed to a single LLM call that decides whether to merge all members into one relation or split them into several (see the prompt in Listing~\ref{lst:cluster-relations}); this repeats for up to $R_r$ rounds until no round shrinks $\mathcal{R}^*$ any further.
 
-\subsection{Entity Types canonicalization}
+\subsection{Entity-Type Canonicalization}
 \label{sec:type-dedup}
 
-This stage both flattens the raw type vocabulary into a canonical set
-$\mathcal{T}^*$ and organizes $\mathcal{T}^*$ into a taxonomy hierarchy $\mathcal{H}^*$.
+Raw type labels are canonicalized into $\mathcal{T}^*$.
+Canonical types are then organized into a single-parent hierarchy
+$\mathcal{H}^*$, which may form a forest.
+Here, entity types correspond to ontology classes.
 
 \paragraph{Type Deduplication}
 Candidate clusters over raw type labels are generated the same way as for
@@ -218,12 +231,12 @@ relations (\S\ref{sec:relation-dedup}, threshold $\theta_t$), but with one addit
 The verification prompt additionally enforces a hyponymy (``kind of'') test: two labels are merged only if neither is a hyponym of the other, even when they are lexically similar or their relation-argument profiles overlap almost entirely. For example, \ \emph{documentary film} and \emph{film} are similar and participate in the same relations, but LLM is instructed to keep them distinct, whereas \emph{movie} and \emph{film}, true synonyms, should
 be merged. The full prompt is given in Listing~\ref{lst:cluster-entity-types}. As in relation deduplication, this embed-cluster-verify cycle repeats for up to $R_t$ rounds until a round adds no further reduction to $\mathcal{T}^*$.
 
-\paragraph{Hierarchy induction}
+\subsection{Hierarchy Induction}
 \label{sec:hierarchy-induction}
 Flat type canonicalization removes surface redundancy but does not encode subsumption relationships between them. AutoOntic therefore induces an explicit is-a hierarchy over $\mathcal{T}^*$ to support two operations that depend on these relationships: restricting entity-merge candidates to structurally compatible types
 (\S\ref{sec:entity-dedup}) and generalizing observed domain/range types to shared ancestors when estimating relation constraints (\S\ref{sec:constraints}).
 
-In AutoOntic, canonical types are organized into a single-parent hierarchy $\mathcal{H}^*$, which may form a forest. Rather than asking an LLM to organize the entire type vocabulary in a single call, AutoOntic decomposes placement into local decisions over the current hierarchy $\mathcal{H*}$, inserting into the one by one from sorted general to specific. To find such ordering of entity types, we compare the PPMI-weighted relation-argument profiles associated with each deduplicated type. Following the distributional inclusion principle, a more general type is expected to occur in a broader range of relational contexts than its more specific subtypes. We use Weeds precision \citep{weeds2004characterising} to estimate the extent to which the contexts associated with one type are contained in those associated with another. The resulting containment scores provide an approximate ordering for hierarchy construction; they are not treated as proof of subsumption. Actual parent-child relationships are determined by the subsequent LLM-adjudicated placement procedure, which can revise earlier attachments as additional types are inserted.
+In AutoOntic, canonical types are organized into a single-parent hierarchy $\mathcal{H}^*$, which may form a forest. Rather than asking an LLM to organize the entire type vocabulary in a single call, AutoOntic decomposes placement into local decisions over the current hierarchy $\mathcal{H}^*$, inserting types one by one from general to specific. To find such ordering of entity types, we compare the PPMI-weighted relation-argument profiles associated with each deduplicated type. Following the distributional inclusion principle, a more general type is expected to occur in a broader range of relational contexts than its more specific subtypes. We use Weeds precision \citep{weeds2004characterising} to estimate the extent to which the contexts associated with one type are contained in those associated with another. The resulting containment scores provide an approximate ordering for hierarchy construction; they are not treated as proof of subsumption. Actual parent-child relationships are determined by the subsequent LLM-adjudicated placement procedure, which can revise earlier attachments as additional types are inserted.
 
 % Types are inserted into the $\mathcal{H*}$ one by one from general to specific. The hierarchy can be initialized from a seed or existing ontology and extended with types discovered in new text. External ontologies can be used as seeds for the $\mathcal{H*}$, so AutoOntic can complement existing ontology. To place an entity type, AutoOntic traverses the currently built hierarchy $\mathcal{H*}$ downward from the current roots. At each level, the LLM performs separate \textbf{parent} and, if no parent is found, \textbf{child} checks. A parent match continues traversal through that node's children. A child match attaches the matched nodes beneath the new type, reattaching ancestors that would create cycles, and stops traversal. If neither succeeds, the type is inserted at the current position. When a level contains more than $B$ candidates, a consolidation call attaches clear siblings under synthesized parents proposed by the LLM. The prompt for parent/child check, and consolidation calls are presented in Appendix~\ref{sec:appendix-hierarchy-pairwise}.
 
@@ -575,26 +588,24 @@ Pooled & 76.2 & 78.8 & 25.1 & 23.0 \\
 \begin{table*}[t]
 \centering
 \small
-\begin{tabular}{lll cccc cccc}
+\begin{tabular}{lll ccc ccc}
 \toprule
-& & & \multicolumn{4}{c}{Type Match} & \multicolumn{4}{c}{Constraint Plausibility} \\
-\cmidrule(lr){4-7} \cmidrule(lr){8-11}
-& & & \multicolumn{3}{c}{Related} & Unrel. & \multicolumn{3}{c}{Related} & Unrel. \\
-\cmidrule(lr){4-6} \cmidrule(lr){7-7} \cmidrule(lr){8-10} \cmidrule(lr){11-11}
-Dataset & Model & Side & Exact & More Gen. & More Narrow & Not Rel. & Exact & More Gen. & More Narrow & Not Rel. \\
+& & & \multicolumn{3}{c}{Type Match} & \multicolumn{3}{c}{Constraint Plausibility} \\
 \midrule
-Wikidata-TekGen & Qwen3-Next-80B & Domain & 58.6 & 14.7 & 17.5 & 9.3 & 9.6  & 34.9 & 1.6 & 53.9 \\
-Wikidata-TekGen & Qwen3-Next-80B & Range  & 53.6 & 22.6 & 16.3 & 7.5 & 12.2 & 33.3 & 2.6 & 51.9 \\
-Wikidata-TekGen & gpt-oss-120b   & Domain & 58.0 & 10.9 & 23.1 & 8.0 & 9.1  & 53.9 & 1.2 & 35.8 \\
-Wikidata-TekGen & gpt-oss-120b   & Range  & 57.2 & 22.1 & 14.6 & 6.2 & 12.3 & 30.7 & 3.7 & 53.3 \\
+Dataset & Model & Side & Exact & More Gen. & More Narrow & Exact & More Gen. & More Narrow \\
 \midrule
-DBpedia-WebNLG  & Qwen3-Next-80B & Domain & 33.5 & 37.3 & 17.6 & 11.7 & 18.5 & 60.1 & 5.0  & 16.5 \\
-DBpedia-WebNLG  & Qwen3-Next-80B & Range  & 39.8 & 25.0 & 23.9 & 11.3 & 21.1 & 49.1 & 13.8 & 16.0 \\
-DBpedia-WebNLG  & gpt-oss-120b   & Domain & 27.3 & 36.7 & 23.8 & 12.2 & 21.3 & 56.9 & 6.1  & 15.8 \\
-DBpedia-WebNLG  & gpt-oss-120b   & Range  & 42.4 & 17.0 & 28.6 & 12.0 & 35.8 & 42.7 & 8.7  & 12.8 \\
+Wikidata-TekGen & Qwen3-Next-80B & Domain & 58.6 & 14.7 & 17.5 & 9.6  & 34.9 & 1.6 \\
+Wikidata-TekGen & Qwen3-Next-80B & Range  & 53.6 & 22.6 & 16.3 & 12.2 & 33.3 & 2.6  \\
+Wikidata-TekGen & gpt-oss-120b   & Domain & 58.0 & 10.9 & 23.1 & 9.1  & 53.9 & 1.2 \\
+Wikidata-TekGen & gpt-oss-120b   & Range  & 57.2 & 22.1 & 14.6 & 12.3 & 30.7 & 3.7 \\
+\midrule
+DBpedia-WebNLG  & Qwen3-Next-80B & Domain & 33.5 & 37.3 & 17.6 & 18.5 & 60.1 & 5.0 \\
+DBpedia-WebNLG  & Qwen3-Next-80B & Range  & 39.8 & 25.0 & 23.9 & 21.1 & 49.1 & 13.8 \\
+DBpedia-WebNLG  & gpt-oss-120b   & Domain & 27.3 & 36.7 & 23.8 & 21.3 & 56.9 & 6.1 \\
+DBpedia-WebNLG  & gpt-oss-120b   & Range  & 42.4 & 17.0 & 28.6 & 35.8 & 42.7 & 8.7  \\
 \bottomrule
 \end{tabular}
-\caption{Domain/range type-judgment distribution (\%, \S\ref{sec:evaluation}), averaged over matched pairs across all domains of each Text2KGBench subset. \emph{Type Match} compares each matched instance's own extracted type against gold (Track A); \emph{Constraint Plausibility} compares the relation's mined domain/range constraint instead (Track B), under the same rubric. Percentages exclude pairs where gold declares no applicable type for that side.}
+\caption{Domain/range type-judgment distribution (\%, \S\ref{sec:evaluation}), averaged over matched pairs across all domains of each Text2KGBench subset. \emph{Type Match} compares each matched triplet's extracted type against gold; \emph{Constraint Plausibility} compares the relation's mined domain/range constraint instead.}
 \label{tab:text2kgbench-types}
 \end{table*}
 
