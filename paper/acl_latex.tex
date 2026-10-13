@@ -518,18 +518,18 @@ Text2KGBench's Ontology Conformance metric measures whether extracted triples us
 \cmidrule(lr){2-3} \cmidrule(lr){4-5}
 Domain & Qwen3-Next-80B & gpt-oss-120b & Qwen3-Next-80B & gpt-oss-120b \\
 \midrule
-ont\_1\_movie     & 76.9 & 74.0 & 74.6 & 78.4 \\
-ont\_2\_music     & 71.2 & 73.8 & 74.0 & 77.4 \\
-ont\_3\_sport     & 45.3 & 47.3 & 87.1 & 87.1 \\
-ont\_4\_book      & 73.1 & 74.5 & 77.6 & 80.3 \\
-ont\_5\_military  & 52.2 & 65.2 & 91.2 & 89.6 \\
-ont\_6\_computer  & 79.2 & 82.6 & 73.5 & 73.3 \\
-ont\_7\_space     & 76.8 & 73.4 & 70.0 & 73.9 \\
-ont\_8\_politics  & 81.8 & 78.3 & 81.8 & 83.1 \\
-ont\_9\_nature    & 60.9 & 67.4 & 88.1 & 88.1 \\
-ont\_10\_culture  & 56.6 & 58.5 & 89.5 & 89.2 \\
+ont\_1\_movie     & 77.4 & 73.7 & 74.5 & 78.9 \\
+ont\_2\_music     & 72.6 & 74.2 & 74.1 & 77.6 \\
+ont\_3\_sport     & 44.3 & 46.5 & 87.6 & 87.2 \\
+ont\_4\_book      & 72.5 & 74.5 & 78.4 & 80.6 \\
+ont\_5\_military  & 52.9 & 63.0 & 90.7 & 90.0 \\
+ont\_6\_computer  & 79.5 & 81.3 & 73.2 & 73.9 \\
+ont\_7\_space     & 75.5 & 73.4 & 70.0 & 73.7 \\
+ont\_8\_politics  & 83.2 & 78.3 & 81.7 & 83.4 \\
+ont\_9\_nature    & 59.1 & 66.3 & 88.8 & 88.6 \\
+ont\_10\_culture  & 43.4 & 54.7 & 89.9 & 89.9 \\
 \midrule
-Averaged & 69.1 & 70.3 & 79.4 & 81.2 \\
+Averaged & 68.9 & 69.9 & 79.6 & 81.5 \\
 \bottomrule
 \end{tabular}
 \caption{Recall (grounded-only, see \S\ref{sec:results-text2kgbench}) and extra rate (\S\ref{sec:evaluation}) per Wikidata-TekGen domain, judged by GPT-4o \citep{openai2024gpt4o}.}
@@ -545,27 +545,27 @@ Averaged & 69.1 & 70.3 & 79.4 & 81.2 \\
 \cmidrule(lr){2-3} \cmidrule(lr){4-5}
 Domain & Qwen3-Next-80B & gpt-oss-120b & Qwen3-Next-80B & gpt-oss-120b \\
 \midrule
-ont\_1\_university            & 71.0 & 71.0 & 29.5 & 23.9 \\
-ont\_2\_musicalwork           & 75.7 & 80.0 & 28.3 & 30.8 \\
-ont\_3\_airport               & 82.3 & 81.9 & 23.5 & 22.1 \\
-ont\_4\_building              & 69.6 & 73.1 & 31.7 & 21.0 \\
-ont\_5\_athlete               & 87.3 & 94.0 & 11.5 & 6.0  \\
-ont\_6\_politician            & 79.5 & 80.0 & 16.6 & 16.7 \\
-ont\_7\_company               & 72.6 & 82.8 & 21.9 & 13.9 \\
-ont\_8\_celestialbody         & 90.6 & 92.8 & 7.3  & 9.6  \\
-ont\_9\_astronaut             & 66.3 & 74.9 & 30.2 & 24.3 \\
-ont\_10\_comicscharacter      & 82.2 & 85.0 & 10.2 & 13.3 \\
-ont\_11\_meanoftransportation & 75.0 & 80.4 & 19.5 & 15.3 \\
-ont\_12\_monument             & 61.8 & 65.5 & 50.0 & 47.1 \\
-ont\_13\_food                 & 69.7 & 67.7 & 36.3 & 42.1 \\
-ont\_14\_writtenwork          & 80.8 & 79.8 & 17.4 & 17.2 \\
-ont\_15\_sportsteam           & 75.8 & 80.0 & 16.7 & 12.8 \\
-ont\_16\_city                 & 63.3 & 63.9 & 44.2 & 37.6 \\
-ont\_17\_artist               & 71.0 & 77.0 & 28.7 & 22.1 \\
-ont\_18\_scientist            & 85.9 & 87.8 & 12.4 & 12.6 \\
-ont\_19\_film                 & 91.8 & 94.4 & 16.6 & 16.6 \\
+ont\_1\_university            & 71.4 & 71.0 & 29.1 & 23.9 \\
+ont\_2\_musicalwork           & 75.5 & 79.5 & 28.4 & 31.2 \\
+ont\_3\_airport               & 79.3 & 78.5 & 26.3 & 25.3 \\
+ont\_4\_building              & 67.3 & 71.5 & 34.0 & 22.7 \\
+ont\_5\_athlete               & 86.3 & 92.3 & 12.5 & 7.7  \\
+ont\_6\_politician            & 80.2 & 79.2 & 15.8 & 17.4 \\
+ont\_7\_company               & 75.8 & 83.4 & 18.5 & 13.2 \\
+ont\_8\_celestialbody         & 90.1 & 92.4 & 7.8  & 10.0 \\
+ont\_9\_astronaut             & 64.9 & 73.5 & 31.7 & 25.7 \\
+ont\_10\_comicscharacter      & 82.2 & 80.4 & 10.2 & 18.1 \\
+ont\_11\_meanoftransportation & 77.5 & 77.5 & 16.7 & 18.3 \\
+ont\_12\_monument             & 58.2 & 63.6 & 52.9 & 48.5 \\
+ont\_13\_food                 & 71.4 & 67.3 & 34.7 & 42.4 \\
+ont\_14\_writtenwork          & 81.9 & 79.8 & 16.4 & 17.2 \\
+ont\_15\_sportsteam           & 74.8 & 79.6 & 17.8 & 13.3 \\
+ont\_16\_city                 & 64.5 & 63.3 & 43.2 & 38.2 \\
+ont\_17\_artist               & 71.8 & 75.8 & 27.9 & 23.3 \\
+ont\_18\_scientist            & 86.1 & 87.8 & 12.2 & 12.6 \\
+ont\_19\_film                 & 92.3 & 93.7 & 16.1 & 17.3 \\
 \midrule
-Pooled & 76.2 & 78.8 & 25.1 & 23.0 \\
+Pooled & 76.4 & 77.9 & 24.9 & 23.9 \\
 \bottomrule
 \end{tabular}
 \caption{Recall and extra rate (\S\ref{sec:evaluation}) per DBpedia-WebNLG domain, judged by GPT-4o \citep{openai2024gpt4o}.}
@@ -868,18 +868,18 @@ Table~\ref{tab:text2kgbench-grounded} reports recall before and after this filte
 \toprule
 Domain & Raw & Filtered & Ungr. (\%) \\
 \midrule
-ont\_1\_movie     & 42.8 & 76.9 & 62.2 \\
-ont\_2\_music     & 46.8 & 71.2 & 51.2 \\
-ont\_3\_sport     & 33.1 & 45.3 & 32.1 \\
-ont\_4\_book      & 49.8 & 73.1 & 45.8 \\
-ont\_5\_military  & 37.3 & 52.2 & 38.7 \\
-ont\_6\_computer  & 59.3 & 79.2 & 34.5 \\
-ont\_7\_space     & 70.3 & 76.8 & 13.6 \\
-ont\_8\_politics  & 67.3 & 81.8 & 29.2 \\
-ont\_9\_nature    & 38.8 & 60.9 & 48.0 \\
-ont\_10\_culture  & 35.8 & 56.6 & 69.4 \\
+ont\_1\_movie     & 42.9 & 77.4 & 62.2 \\
+ont\_2\_music     & 46.9 & 72.6 & 51.2 \\
+ont\_3\_sport     & 32.0 & 44.3 & 32.1 \\
+ont\_4\_book      & 48.6 & 72.5 & 45.8 \\
+ont\_5\_military  & 39.1 & 52.9 & 38.7 \\
+ont\_6\_computer  & 59.8 & 79.5 & 34.5 \\
+ont\_7\_space     & 69.9 & 75.5 & 13.6 \\
+ont\_8\_politics  & 67.8 & 83.2 & 29.2 \\
+ont\_9\_nature    & 36.9 & 59.1 & 48.0 \\
+ont\_10\_culture  & 34.1 & 43.4 & 69.4 \\
 \midrule
-Averaged & 45.7 & 69.1 & 48.8 \\
+Averaged & 45.4 & 68.9 & 48.8 \\
 \bottomrule
 \end{tabular}%
 }
@@ -894,8 +894,8 @@ Averaged & 45.7 & 69.1 & 48.8 \\
 \toprule
 Model & Recall, grounded & Recall, ungrounded \\
 \midrule
-Qwen3-Next-80B & 69.1 & 21.1 \\
-gpt-oss-120b   & 70.3 & 20.8 \\
+Qwen3-Next-80B & 68.9 & 20.6 \\
+gpt-oss-120b   & 69.9 & 19.7 \\
 \bottomrule
 \end{tabular}
 \caption{Recall (\%) computed separately over the grounded and ungrounded gold-triple subsets, Averaged across all ten Wikidata-TekGen domains, \textsc{Separate} condition ($n=3{,}705$ grounded / $3{,}527$ ungrounded triplets, both models).}
