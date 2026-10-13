@@ -525,69 +525,6 @@ Text2KGBench's Ontology Conformance metric measures whether extracted triples us
 \begin{table*}[t]
 \centering
 \small
-\begin{tabular}{lcccc}
-\toprule
-& \multicolumn{2}{c}{Recall (\%, grounded-only)} & \multicolumn{2}{c}{Extra rate (\%)} \\
-\cmidrule(lr){2-3} \cmidrule(lr){4-5}
-Domain & Qwen3-Next-80B & gpt-oss-120b & Qwen3-Next-80B & gpt-oss-120b \\
-\midrule
-ont\_1\_movie     & 77.4 & 73.7 & 74.5 & 78.9 \\
-ont\_2\_music     & 72.6 & 74.2 & 74.1 & 77.6 \\
-ont\_3\_sport     & 44.3 & 46.5 & 87.6 & 87.2 \\
-ont\_4\_book      & 72.5 & 74.5 & 78.4 & 80.6 \\
-ont\_5\_military  & 52.9 & 63.0 & 90.7 & 90.0 \\
-ont\_6\_computer  & 79.5 & 81.3 & 73.2 & 73.9 \\
-ont\_7\_space     & 75.5 & 73.4 & 70.0 & 73.7 \\
-ont\_8\_politics  & 83.2 & 78.3 & 81.7 & 83.4 \\
-ont\_9\_nature    & 59.1 & 66.3 & 88.8 & 88.6 \\
-ont\_10\_culture  & 43.4 & 54.7 & 89.9 & 89.9 \\
-\midrule
-Averaged & 68.9 & 69.9 & 79.6 & 81.5 \\
-\bottomrule
-\end{tabular}
-\caption{Recall (grounded-only, see \S\ref{sec:results-text2kgbench}) and extra rate (\S\ref{sec:evaluation}) per Wikidata-TekGen domain, judged by GPT-4o \citep{openai2024gpt4o}.}
-\label{tab:text2kgbench-separate}
-\end{table*}
-
-\begin{table*}[t]
-\centering
-\small
-\begin{tabular}{lcccc}
-\toprule
-& \multicolumn{2}{c}{Recall (\%, unfiltered)} & \multicolumn{2}{c}{Extra rate (\%)} \\
-\cmidrule(lr){2-3} \cmidrule(lr){4-5}
-Domain & Qwen3-Next-80B & gpt-oss-120b & Qwen3-Next-80B & gpt-oss-120b \\
-\midrule
-ont\_1\_university            & 71.4 & 71.0 & 29.1 & 23.9 \\
-ont\_2\_musicalwork           & 75.5 & 79.5 & 28.4 & 31.2 \\
-ont\_3\_airport               & 79.3 & 78.5 & 26.3 & 25.3 \\
-ont\_4\_building              & 67.3 & 71.5 & 34.0 & 22.7 \\
-ont\_5\_athlete               & 86.3 & 92.3 & 12.5 & 7.7  \\
-ont\_6\_politician            & 80.2 & 79.2 & 15.8 & 17.4 \\
-ont\_7\_company               & 75.8 & 83.4 & 18.5 & 13.2 \\
-ont\_8\_celestialbody         & 90.1 & 92.4 & 7.8  & 10.0 \\
-ont\_9\_astronaut             & 64.9 & 73.5 & 31.7 & 25.7 \\
-ont\_10\_comicscharacter      & 82.2 & 80.4 & 10.2 & 18.1 \\
-ont\_11\_meanoftransportation & 77.5 & 77.5 & 16.7 & 18.3 \\
-ont\_12\_monument             & 58.2 & 63.6 & 52.9 & 48.5 \\
-ont\_13\_food                 & 71.4 & 67.3 & 34.7 & 42.4 \\
-ont\_14\_writtenwork          & 81.9 & 79.8 & 16.4 & 17.2 \\
-ont\_15\_sportsteam           & 74.8 & 79.6 & 17.8 & 13.3 \\
-ont\_16\_city                 & 64.5 & 63.3 & 43.2 & 38.2 \\
-ont\_17\_artist               & 71.8 & 75.8 & 27.9 & 23.3 \\
-ont\_18\_scientist            & 86.1 & 87.8 & 12.2 & 12.6 \\
-ont\_19\_film                 & 92.3 & 93.7 & 16.1 & 17.3 \\
-\midrule
-Pooled & 76.4 & 77.9 & 24.9 & 23.9 \\
-\bottomrule
-\end{tabular}
-\caption{Recall and extra rate (\S\ref{sec:evaluation}) per DBpedia-WebNLG domain, judged by GPT-4o \citep{openai2024gpt4o}.}
-\label{tab:dbpedia-webnlg-separate}
-\end{table*}
-
-\begin{table*}[t]
-\centering
-\small
 \begin{tabular}{llll ccc ccc}
 \toprule
 & & & & \multicolumn{3}{c}{Type Match} & \multicolumn{3}{c}{Constraint Plausibility} \\
@@ -879,6 +816,72 @@ domains, per Text2KGBench condition.}
 % independently.}
 % \label{tab:appendix-tokens-mine}
 % \end{table}
+
+\section{Per-Domain Recall and Extra Rate}
+\label{sec:appendix-per-domain}
+
+\begin{table*}[t]
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+& \multicolumn{2}{c}{Recall (\%, grounded-only)} & \multicolumn{2}{c}{Extra rate (\%)} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5}
+Domain & Qwen3-Next-80B & gpt-oss-120b & Qwen3-Next-80B & gpt-oss-120b \\
+\midrule
+ont\_1\_movie     & 77.4 & 73.7 & 74.5 & 78.9 \\
+ont\_2\_music     & 72.6 & 74.2 & 74.1 & 77.6 \\
+ont\_3\_sport     & 44.3 & 46.5 & 87.6 & 87.2 \\
+ont\_4\_book      & 72.5 & 74.5 & 78.4 & 80.6 \\
+ont\_5\_military  & 52.9 & 63.0 & 90.7 & 90.0 \\
+ont\_6\_computer  & 79.5 & 81.3 & 73.2 & 73.9 \\
+ont\_7\_space     & 75.5 & 73.4 & 70.0 & 73.7 \\
+ont\_8\_politics  & 83.2 & 78.3 & 81.7 & 83.4 \\
+ont\_9\_nature    & 59.1 & 66.3 & 88.8 & 88.6 \\
+ont\_10\_culture  & 43.4 & 54.7 & 89.9 & 89.9 \\
+\midrule
+Averaged & 68.9 & 69.9 & 79.6 & 81.5 \\
+\bottomrule
+\end{tabular}
+\caption{Recall (grounded-only, see \S\ref{sec:results-text2kgbench}) and extra rate (\S\ref{sec:evaluation}) per Wikidata-TekGen domain, judged by GPT-4o \citep{openai2024gpt4o}.}
+\label{tab:text2kgbench-separate}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+& \multicolumn{2}{c}{Recall (\%, unfiltered)} & \multicolumn{2}{c}{Extra rate (\%)} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5}
+Domain & Qwen3-Next-80B & gpt-oss-120b & Qwen3-Next-80B & gpt-oss-120b \\
+\midrule
+ont\_1\_university            & 71.4 & 71.0 & 29.1 & 23.9 \\
+ont\_2\_musicalwork           & 75.5 & 79.5 & 28.4 & 31.2 \\
+ont\_3\_airport               & 79.3 & 78.5 & 26.3 & 25.3 \\
+ont\_4\_building              & 67.3 & 71.5 & 34.0 & 22.7 \\
+ont\_5\_athlete               & 86.3 & 92.3 & 12.5 & 7.7  \\
+ont\_6\_politician            & 80.2 & 79.2 & 15.8 & 17.4 \\
+ont\_7\_company               & 75.8 & 83.4 & 18.5 & 13.2 \\
+ont\_8\_celestialbody         & 90.1 & 92.4 & 7.8  & 10.0 \\
+ont\_9\_astronaut             & 64.9 & 73.5 & 31.7 & 25.7 \\
+ont\_10\_comicscharacter      & 82.2 & 80.4 & 10.2 & 18.1 \\
+ont\_11\_meanoftransportation & 77.5 & 77.5 & 16.7 & 18.3 \\
+ont\_12\_monument             & 58.2 & 63.6 & 52.9 & 48.5 \\
+ont\_13\_food                 & 71.4 & 67.3 & 34.7 & 42.4 \\
+ont\_14\_writtenwork          & 81.9 & 79.8 & 16.4 & 17.2 \\
+ont\_15\_sportsteam           & 74.8 & 79.6 & 17.8 & 13.3 \\
+ont\_16\_city                 & 64.5 & 63.3 & 43.2 & 38.2 \\
+ont\_17\_artist               & 71.8 & 75.8 & 27.9 & 23.3 \\
+ont\_18\_scientist            & 86.1 & 87.8 & 12.2 & 12.6 \\
+ont\_19\_film                 & 92.3 & 93.7 & 16.1 & 17.3 \\
+\midrule
+Pooled & 76.4 & 77.9 & 24.9 & 23.9 \\
+\bottomrule
+\end{tabular}
+\caption{Recall and extra rate (\S\ref{sec:evaluation}) per DBpedia-WebNLG domain, judged by GPT-4o \citep{openai2024gpt4o}.}
+\label{tab:dbpedia-webnlg-separate}
+\end{table*}
 
 \section{Sentence Groundedness Analysis}
 \label{sec:appendix-groundedness}
