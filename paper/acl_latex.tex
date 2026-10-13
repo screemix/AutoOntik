@@ -146,7 +146,7 @@ reference-based protocol that classifies induced ontology types as exact, broade
 \begin{figure}[t]
 \centering
 \includegraphics[height=0.46\textheight,keepaspectratio]{pipeline_architecture.pdf}
-\caption{The AutoOntic pipeline. A schema-free LLM extractor (\S\ref{sec:extraction}) produces a collection $\mathcal{G}$ of raw triplets $g=(s,t_s,r,o,t_o,Q)$, canonicalized into a relation vocabulary $\mathcal{R}^*$ (\S\ref{sec:relation-dedup}) and a type vocabulary $\mathcal{T}^*$ organized into a single-parent is-a hierarchy $\mathcal{H}^*$(\S\ref{sec:type-dedup}). Entity mentions are then deduplicated using that hierarchy as a symbolic gate (\S\ref{sec:hierarchy-induction}), and domain/range constraints are mined by re-resolving $\mathcal{G}$ against $\mathcal{R}^*$, $\mathcal{T}^*$, and  $\mathcal{H}^*$(\S\ref{sec:constraints}). Colored dashed arrows mark additional direct inputs beyond the sequential chain.}
+\caption{The AutoOntic pipeline. A schema-free LLM extractor (\S\ref{sec:extraction}) produces a collection $\mathcal{G}$ of raw triplets $g=(s,t_s,r,o,t_o,Q)$. Their relation and type labels are canonicalized into a relation vocabulary $\mathcal{R}^*$ (\S\ref{sec:relation-dedup}) and a type vocabulary $\mathcal{T}^*$ organized into a single-parent is-a hierarchy $\mathcal{H}^*$(\S\ref{sec:type-dedup}). Entity mentions are then deduplicated using that hierarchy as a symbolic gate (\S\ref{sec:hierarchy-induction}), and domain/range constraints are mined by re-resolving $\mathcal{G}$ against $\mathcal{R}^*$, $\mathcal{T}^*$, and  $\mathcal{H}^*$(\S\ref{sec:entity-dedup}). Colored dashed arrows mark additional direct inputs beyond the sequential chain.}
 \label{fig:pipeline}
 \end{figure}
 
@@ -236,13 +236,15 @@ be merged. The full prompt is given in Listing~\ref{lst:cluster-entity-types}. A
 Flat type canonicalization removes surface redundancy but does not encode subsumption relationships between them. AutoOntic therefore induces an explicit is-a hierarchy over $\mathcal{T}^*$ to support two operations that depend on these relationships: restricting entity-merge candidates to structurally compatible types
 (\S\ref{sec:entity-dedup}) and generalizing observed domain/range types to shared ancestors when estimating relation constraints (\S\ref{sec:constraints}).
 
-In AutoOntic, canonical types are organized into a single-parent hierarchy $\mathcal{H}^*$, which may form a forest. Rather than asking an LLM to organize the entire type vocabulary in a single call, AutoOntic decomposes placement into local decisions over the current hierarchy $\mathcal{H}^*$, inserting types one by one from general to specific. To find such ordering of entity types, we compare the PPMI-weighted relation-argument profiles associated with each deduplicated type. Following the distributional inclusion principle, a more general type is expected to occur in a broader range of relational contexts than its more specific subtypes. We use Weeds precision \citep{weeds2004characterising} to estimate the extent to which the contexts associated with one type are contained in those associated with another. The resulting containment scores define an approximate ordering for hierarchy construction; they are not treated as proof of subsumption. Actual parent-child relationships are determined by the subsequent LLM-adjudicated placement procedure, which can revise earlier attachments as additional types are inserted.
+In AutoOntic, canonical types are organized into a single-parent hierarchy $\mathcal{H}^*$, which may form a forest. Rather than asking an LLM to organize the entire type vocabulary in a single call, AutoOntic decomposes placement into local decisions over the current hierarchy $\mathcal{H}^*$, inserting types one by one from general to specific. To find such ordering of entity types, we compare the PPMI-weighted relation-argument profiles associated with each deduplicated type. Following the distributional inclusion principle, a more general type is expected to occur in a broader range of relational contexts than its more specific subtypes. We use Weeds precision \citep{weeds2004characterising} to estimate the extent to which the contexts associated with one type are contained in those associated with another. The resulting containment scores define an approximate generality score based on how many other types could fit beneath each type. Types are processed in descending score order; these scores are not treated as proof of subsumption. Actual parent-child relationships are determined by the subsequent LLM-adjudicated placement procedure, which can revise earlier attachments as additional types are inserted. The hierarchy can be initialized from a seed or existing ontology and extended with types discovered in new text. Selected seed categories can be pinned as roots.
 
 % Types are inserted into the $\mathcal{H*}$ one by one from general to specific. The hierarchy can be initialized from a seed or existing ontology and extended with types discovered in new text. External ontologies can be used as seeds for the $\mathcal{H*}$, so AutoOntic can complement existing ontology. To place an entity type, AutoOntic traverses the currently built hierarchy $\mathcal{H*}$ downward from the current roots. At each level, the LLM performs separate \textbf{parent} and, if no parent is found, \textbf{child} checks. A parent match continues traversal through that node's children. A child match attaches the matched nodes beneath the new type, reattaching ancestors that would create cycles, and stops traversal. If neither succeeds, the type is inserted at the current position. When a level contains more than $B$ candidates, a consolidation call attaches clear siblings under synthesized parents proposed by the LLM. The prompt for parent/child check, and consolidation calls are presented in Appendix~\ref{sec:appendix-hierarchy-pairwise}.
 
-Starting from the roots, the procedure checks whether the new type belongs below an existing node or should instead become a parent of one or more existing nodes. A \textbf{parent} match directs the traversal into that node's subtree; a \textbf{child} match triggers insertion and reassignment of the affected parent-child links, \textbf{synonym} match merge two synonymous nodes that are not in hyponymy relation. If neither relation holds, the type is placed at the current position. When a level contains too many candidates for a single comparison, a \textbf{consolidation} LLM call groups clear siblings under a proposed parent.
+% Starting from the roots, the procedure checks whether the new type belongs below an existing node or should instead become a parent of one or more existing nodes. A \textbf{parent} match directs the traversal into that node's subtree; a \textbf{child} match triggers insertion and reassignment of the affected parent-child links, \textbf{synonym} match merge two synonymous nodes that are not in hyponymy relation. If neither relation holds, the type is placed at the current position. When a level contains too many candidates for a single comparison, a \textbf{consolidation} LLM call groups clear siblings under a proposed parent.
 
-This design keeps each decision focused on a bounded part of the hierarchy, reducing the context required for an individual LLM call and avoiding repeated presentation of the entire ontology. More importantly, the decisions have explicit structural consequences: a later, more general type can correct an earlier attachment by becoming the parent of an existing node. Thus, the procedure does not merely append labels to a taxonomy; it incrementally constructs and repairs the hierarchy as new evidence becomes available. The local checks, consolidation procedure, and reassignment rules are specified in Appendix~\ref{sec:appendix-prompts}.
+For each type, AutoOntic traverses the hierarchy downward from the current roots. At each level, the LLM performs separate \textbf{parent} and, if no parent is found, \textbf{child} checks. The parent check asks whether an existing candidate subsumes the new type. A parent match continues traversal through that node's children; a synonymous candidate is instead merged with the new type. The child check asks whether the new type subsumes any existing candidates. A child match attaches the matched nodes beneath the new type and stops traversal. If neither succeeds, the type is inserted at the current position. When a level contains more than $B$ candidates, a consolidation call attaches clear siblings under synthesized parents proposed by the LLM.
+
+This design keeps each decision focused on a bounded part of the hierarchy, reducing the context required for an individual LLM call and avoiding repeated presentation of the entire ontology. More importantly, the decisions have explicit structural consequences: a later, more general type can correct an earlier attachment by becoming the parent of an existing node. Thus, the procedure does not merely append labels to a taxonomy; it incrementally constructs and repairs the hierarchy as new evidence becomes available. Placement depends on the existing hierarchy and the order in which types are processed. The local checks, consolidation procedure, and reassignment rules are specified in Appendix~\ref{sec:appendix-prompts}.
 
 % \paragraph{Priority queue.} Every canonical type in $\mathcal{T}^*$ is
 % represented by a relation-argument profile, PPMI-weighted by default. A
@@ -305,7 +307,7 @@ This design keeps each decision focused on a bounded part of the hierarchy, redu
 
 \begin{figure}[t]
 \includegraphics[width=\columnwidth]{hierarchy_induction.pdf}
-\caption{Hierarchy induction algorithm. Canonical types in $\mathcal{T}^*$ are processed in descending order of a generality score based on Weeds precision over their relation-argument profiles. Starting from the roots of $\mathcal{H}^*$, an LLM determines whether the current type $t\in\mathcal{T}^*$ is synonymous with, a parent of, or a child of a type at the current level. Synonymous types are merged; a parent match triggers recursive search in that node's subtree; and a child match attaches $t$ as their parent. If no match is found, $t$ is added as a sibling at the current level. When the number of nodes at a level exceeds threshold $B$, an LLM consolidates related siblings under a synthesized parent, limiting the context required for subsequent placement decisions. The procedure repeats until all types have been processed.}
+\caption{Hierarchy induction algorithm. Canonical types in $\mathcal{T}^*$ are processed in descending order of a generality score based on Weeds precision over their relation-argument profiles. Starting from the roots of $\mathcal{H}^*$, an LLM first checks whether an existing candidate is a parent of the current type $t\in\mathcal{T}^*$. Synonymous types are merged; otherwise, a parent match continues traversal through that candidate's children. If no parent is found, a separate child check identifies existing candidates to attach beneath $t$. If no match is found, $t$ is added as a sibling at the current level. When the number of nodes at a level exceeds threshold $B$, an LLM consolidates related siblings under a synthesized parent, limiting the context required for subsequent placement decisions. The procedure repeats until all types have been processed.}
 \label{fig:hierarchy-steps}
 \end{figure}
 
@@ -320,18 +322,21 @@ This design keeps each decision focused on a bounded part of the hierarchy, redu
 point in the procedure: acyclicity and the absence of transitive shortcut
 edges follow directly from the construction.
 
-\subsection{Entity Canonicalization}
+\subsection{Entity Canonicalization and Class Assignment}
 \label{sec:entity-dedup}
 
-Entity canonicalization step assigns each entity its canonical type  and deduplicates synonymous mentions. An entity's identity is the compound pair (name, canonical type) rather than name alone, so
-that homonymous names typed differently (e.g.\ \emph{Paris} the city versus \emph{Paris} the person) are never conflated by construction.
+% Entity canonicalization step assigns each entity its canonical type  and deduplicates synonymous mentions. An entity's identity is the compound pair (name, canonical type) rather than name alone, so that homonymous names typed differently (e.g.\ \emph{Paris} the city versus \emph{Paris} the person) are never conflated by construction.
 
-Before embedding-based comparison, candidate pairs are restricted by a symbolic gate: two mentions are only ever compared if they share
-literally the same type, or are siblings under the same parent
-in the induced type hierarchy (\S\ref{sec:hierarchy-induction}). Clustering entities surface forms is performed with HDBSCAN  among candidates within one sibling
+Entity mentions are represented by $(\text{name},\text{type})$, allowing identical names with different types to remain distinct (e.g., \emph{Paris} the city and \emph{Paris} the person).
+
+% Before embedding-based comparison, candidate pairs are restricted by a symbolic gate: two mentions are only ever compared if they share literally the same type, or are siblings under the same parent in the induced type hierarchy (\S\ref{sec:hierarchy-induction}).
+Initial comparisons are restricted to mentions with the same type or sibling types under the same immediate parent in $\mathcal{H}^*$ (\S\ref{sec:hierarchy-induction}).
+Clustering entities surface forms is performed with HDBSCAN  among candidates within one sibling
 group. Within each such partition, merging then follows the round-based procedure common to every deduplication stage (\S\ref{sec:reoccurring-design}, Listing~\ref{lst:cluster-entity-names}), applied independently per partition. Candidates are clustered at similarity threshold $\theta_e$, and each partition's embed-cluster-verify cycle repeats for up to $R_e$ rounds.
 
-\subsection{Constraints Induction}
+A final reconciliation pass broadens candidate comparisons across sibling groups whose types share a common ancestor in $\mathcal{H}^*$. A merged entity retains the union of its mention types, with their lowest common ancestor assigned as its primary type.
+
+\subsection{Domain/Range Constraint Induction}
 \label{sec:constraints}
 
 % \paragraph{Stage 0: re-resolution.} For every raw triplet, its subject and
@@ -371,10 +376,11 @@ group. Within each such partition, merging then follows the round-based procedur
 % \textsc{Hint} ($\geq \tau_{\text{hint}}$) constraint strengths, discarded
 % below $\tau_{\text{hint}}$ (values in Table~\ref{tab:hyperparams}).
 
-Constraint induction first re-resolves every raw triplet against the canonical relation and type vocabularies, $\mathcal{R*}$ and $\mathcal{T*}$, produced by \S\ref{sec:relation-dedup} and \S\ref{sec:type-dedup}. Because relation canonicalization may merge a predicate with its grammatical inverse (e.g.\ \emph{directed} and \emph{was directed by}), each canonical relation with multiple surface forms is processed by an LLM that classifies each form as \emph{forward} or \emph{inverted}; inverted forms then have their subject and object types swapped before constraint estimation.
+% Constraint induction first re-resolves every raw triplet against the canonical relation and type vocabularies, $\mathcal{R*}$ and $\mathcal{T*}$, produced by \S\ref{sec:relation-dedup} and \S\ref{sec:type-dedup}. Because relation canonicalization may merge a predicate with its grammatical inverse (e.g.\ \emph{directed} and \emph{was directed by}), each canonical relation with multiple surface forms is processed by an LLM that classifies each form as \emph{forward} or \emph{inverted}; inverted forms then have their subject and object types swapped before constraint estimation.
 
-For each canonical relation's domain (subject-role types) and range (object-role types),
-considered independently. We compute the exact lowest common ancestor (LCA) of observed subect/object types in the single-parent hierarchy. If observations span disconnected roots, they are partitioned by root and an LCA is computed within each partition, yielding multiple domain/range signatures when a relation connects unrelated type families.
+% For each canonical relation's domain (subject-role types) and range (object-role types), considered independently. We compute the exact lowest common ancestor (LCA) of observed subect/object types in the single-parent hierarchy. If observations span disconnected roots, they are partitioned by root and an LCA is computed within each partition, yielding multiple domain/range signatures when a relation connects unrelated type families.
+
+Constraint induction first re-resolves every raw triplet against the canonical relation and type vocabularies, $\mathcal{R}^*$ and $\mathcal{T}^*$, produced by \S\ref{sec:relation-dedup} and \S\ref{sec:type-dedup}. Because relation canonicalization may merge a predicate with its grammatical inverse (e.g.\ \emph{directed} and \emph{was directed by}), each canonical relation with multiple surface forms is processed by an LLM that classifies each form as \emph{forward} or \emph{inverted}; inverted forms then have their subject and object types swapped before constraint estimation.
 
 For each canonical relation, domain and range types are considered independently. We compute the exact lowest common ancestor (LCA) of observed types in $\mathcal{H}^*$. If observations span disconnected roots, they are partitioned by root and an LCA is computed within each partition, yielding multiple domain/range signatures when a relation connects unrelated type families.
 
@@ -383,7 +389,7 @@ Finally, triplets are grouped by their direction-corrected $(T_d,T_r)$ signature
 \mathrm{conf}(r,T_d,T_r)=
 \frac{\mathrm{support}(r,T_d,T_r)}{\mathrm{total}(r)},
 \end{equation}
-where $T_d, T_r$ - entity types of domain and range correspondingly.
+where $T_d$ and $T_r$ are the domain and range entity types, respectively.
 % Constraints are assigned \textsc{Hard}, \textsc{Soft}, or \textsc{Hint} strength by thresholding it at $\tau_{\mathrm{hard}}$, $\tau_{\mathrm{soft}}$, and $\tau_{\mathrm{hint}}$.
 % \section{KG Retrieval and QA}
 % TODO -- not yet written.
@@ -437,7 +443,7 @@ We match triples from the gold side outward to evaluate recovery of the referenc
 
 \textbf{Domain/Range Type Matching.} For each matched triple, we compare AutoOntic's subject and object types with the gold relation's domain and range classes. For matches classified as \emph{inverse}, we swap the gold domain and range. An LLM judge classifies each comparison as \textsc{Exact} (equivalent types), \textsc{More General} (AutoOntic's type subsumes the gold type), \textsc{More Narrow} (AutoOntic's type is a subtype of the gold type), or \textsc{Not Related}. We report the distribution of these judgments separately for domain and range, thereby distinguishing exact type alignment in triplets from differences in the generality of the induced types.
 
-\textbf{Constraint Plausibility.} Type matching evaluates individual triples, whereas AutoOntic also induces relation-level domain and range constraints by generalizing observed argument types using their least common ancestor (LCA). To evaluate these constraints, for each matched triple we identify the induced constraint(s) whose domain and range cover the triple's subject and object types, accounting for inverse matches and allowing multiple constraints when a relation spans disconnected hierarchy partitions. We then compare each selected constraint's domain and range with the corresponding gold classes using the same four judgment categories as in Domain/Range Type Matching. We report the resulting distributions alongside each constraint's support and confidence, including constraints below the $\tau_{\text{hint}}$ threshold and regardless of their \textsc{Hard}, \textsc{Soft}, or \textsc{Hint} tier (\S\ref{sec:constraints}). Comparing instance-level type judgments with constraint-level judgments shows how well the induced constraints align with the reference ontology and whether they tend to be more general or more specific than the gold classes.
+\textbf{Constraint Plausibility.} Type matching evaluates individual triples, whereas AutoOntic also induces relation-level domain and range constraints by generalizing observed argument types using their lowest common ancestor (LCA). To evaluate these constraints, for each matched triple we identify the induced constraint(s) whose domain and range cover the triple's subject and object types, accounting for inverse matches and allowing multiple constraints when a relation spans disconnected hierarchy partitions. We then compare each selected constraint's domain and range with the corresponding gold classes using the same four judgment categories as in Domain/Range Type Matching. We report the resulting distributions alongside each constraint's support and confidence, including constraints below the $\tau_{\text{hint}}$ threshold and regardless of their \textsc{Hard}, \textsc{Soft}, or \textsc{Hint} tier (\S\ref{sec:constraints}). Comparing instance-level type judgments with constraint-level judgments shows how well the induced constraints align with the reference ontology and whether they tend to be more general or more specific than the gold classes.
 
 Text2KGBench's Ontology Conformance metric measures whether extracted triples use relations from the input ontology's canonical relation vocabulary; eaving domain/range validation as a direction for future extension\citep{mihindukulasooriya2023text2kgbench}. Our evaluation complements this metric by assessing domain and range alignment at both the instance and induced-constraint levels, using graded judgments that distinguish equivalent, broader, narrower, and unrelated types.
 % \paragraph{Direction breakdown} reports the proportion of matches
@@ -721,17 +727,12 @@ Symbol & Description & Value \\
 \multicolumn{3}{l}{\textit{Relation deduplication (\S\ref{sec:relation-dedup})}} \\
 $\theta_r$ & HDBSCAN cosine-similarity threshold & 0.75 \\
 $R_r$ & Merge-round cap & 5 \\
-$C_r$ & Cluster-size split/stitch cap & 40 \\
 \addlinespace
 \multicolumn{3}{l}{\textit{Entity-type canonicalization (\S\ref{sec:type-dedup})}} \\
 $\theta_t$ & HDBSCAN cosine-similarity threshold & 0.75 \\
-$k_{\text{ctx}}$ & Relation-context top-$k$ shown to the verifier & 5 \\
 $R_t$ & Merge-round cap & 5 \\
-$C_t$ & Cluster-size split/stitch cap & 40 \\
 \addlinespace
 \multicolumn{3}{l}{\textit{Hierarchy induction (\S\ref{sec:hierarchy-induction})}} \\
-$\tau$ & Weeds-precision containment threshold & 0.75 \\
-$\delta$ & Priority-band tolerance (in-degree units) & 10 \\
 $B$ & Candidate batch size & 30 \\
 $D_{\max}$ & Maximum placement depth & 50 \\
 -- & Relation-argument weighting scheme & PPMI \\
@@ -759,7 +760,7 @@ $\tau_{\text{hint}}$ & HINT confidence threshold (discard below) & 0.20 \\
 \section{Hierarchy induction example}
 \begin{figure*}[t]
 \centering
-\includegraphics[width=\linewidth]{paper/hierarchy_induction_toy_example.pdf}
+\includegraphics[width=\linewidth]{hierarchy_induction_toy_example.pdf}
 \caption{Hierarchy induction on a film-domain vocabulary, one placement decision per step. (1) The initial $\mathcal{H}^*$ is empty, \emph{audiovisual work} settles as a root; (2) once \emph{documentary film} is placed, LLM judges \emph{audiovisual work} as a parent of \emph{documentary film}, which is too shallow; (3) LLM judges \emph{audiovisual work} as a parent of \emph{film} and \emph{documentary film} as a child of \emph{film}, reparenting too shallow is-a relation; (4) \emph{movie} is identified as a synonym of film; (5) \emph{war film} settles under \emph{audiovisual work} and then under \emph{film} as a child; (6) \emph{action film} is judged as a child of \emph{audiovisual work} and then as a child of \emph{film}; (7) there are too many siblings under \emph{film}: consolidating war and action film under a common parent, \emph{genre film}; (h) \emph{biographical film} settles under \emph{documentary film}, giving the final tree.}
 \label{fig:hierarchy-steps-example}
 \end{figure*}
@@ -768,8 +769,8 @@ $\tau_{\text{hint}}$ & HINT confidence threshold (discard below) & 0.20 \\
 \label{sec:appendix-tokens}
 
 Table~\ref{tab:appendix-tokens-text2kg} reports total prompt+completion
-tokens consumed by extraction (Step 0, \S\ref{sec:extraction}) and the
-five orchestrated pipeline steps (\S\ref{sec:methods}), summed across all
+tokens consumed by extraction (Step 1, \S\ref{sec:extraction}) and the
+five subsequent pipeline stages (\S\ref{sec:methods}), summed across all
 domains, for each Text2KGBench condition reported in
 \S\ref{sec:results-text2kgbench}.
 % Table~\ref{tab:appendix-tokens-mine} reports the same breakdown for the
@@ -890,7 +891,7 @@ Text2KGBench's Wikidata-TekGen sentences are drawn from mid-article Wikipedia te
 %This class of noise is well documented for distant supervision in relation extraction generally \citep{mintz2009distant, riedel2010modeling}, and DocRED \citep{yao2019docred} reports an analogous statistic built to motivate the opposite fix (document-level rather than sentence-level extraction): at least 40.7\% of its relational facts require reading multiple sentences. 
 % though it is consistent with the known limitations of the distant-supervision alignment its underlying corpus uses.
 
-We use an additional GPT-4o judge to classify, per gold triple, whether its sentence alone -- no outside knowledge, no article context -- actually supports it: the subject must be identifiable within the sentence (allowing name-form variation, e.g. ``Charles Spurgeon Johnson'' in the sentence vs.\ ``Charles S. Johnson'' in the reference still counts as grounded), and the object and relationship must actually be stated or implied. Recall in \S\ref{sec:results-text2kgbench} is reported with flagged (ungrounded) triplets excluded from the denominator, as a post-filter over the already-collected judge results requiring no re-extraction or re-matching.
+We use an additional GPT-5.1 judge to classify, per gold triple, whether its sentence alone -- no outside knowledge, no article context -- actually supports it: the subject must be identifiable within the sentence (allowing name-form variation, e.g. ``Charles Spurgeon Johnson'' in the sentence vs.\ ``Charles S. Johnson'' in the reference still counts as grounded), and the object and relationship must actually be stated or implied. Recall in \S\ref{sec:results-text2kgbench} is reported with flagged (ungrounded) triplets excluded from the denominator, as a post-filter over the already-collected judge results requiring no re-extraction or re-matching.
 
 Table~\ref{tab:text2kgbench-grounded} reports recall before and after this filter, per domain (Qwen3-Next-80B): Averaged across Wikidata-TekGen, 48.8\% of gold triplets are flagged ungrounded. Table~\ref{tab:text2kgbench-grounded-split} makes the comparison more direct -- recall computed \emph{separately} over the grounded and the ungrounded subsets, Averaged across all ten domains, for both backbones. Recall on grounded triplets is more than three times that on ungrounded ones for both models, evidence the classification tracks something real rather than adding noise on top of noise: a triple the judge calls grounded is recovered at roughly the rate the pipeline's own extraction and matching quality would predict, while an ungrounded one is only matched when the extractor happens to supply outside knowledge the sentence alone did not license.
 
@@ -954,8 +955,8 @@ gpt-oss-120b   & 69.9 & 19.7 \\
 \label{sec:appendix-prompts}
 
 This appendix lists, verbatim, the system prompt template behind each of
-the eight LLM calls the orchestrated pipeline makes (as shipped in
-\texttt{src/ontodisco/utils/prompts/}).
+the eight LLM calls the orchestrated pipeline makes, without full example's texts for simplicity (full prompts are shipped in
+\texttt{src/ontodisco/utils/prompts/}.
 
 \subsection{Typed Triplet Extraction}
 \label{sec:appendix-extraction}
@@ -987,71 +988,7 @@ NO additional text, NO "```" in json, return ONLY triplets in JSON format.
 
 
 <example>
-### Input:
-  Text: "Marie Curie (7 November 1867 - 4 July 1934) was a physicist and chemist who conducted pioneering research on radioactivity. She received the Nobel Prize in Physics in 1903 and the Nobel Prize in Chemistry in 1911.
-### Output:
-    {
-        "triplets":
-        [
-            {
-                "subject": "Marie Curie",
-                "relation": "date of birth",
-                "object": "7 November 1867",
-                "qualifiers": [],
-                "subject_type": "human",
-                "object_type": "date"
-            },
-            {
-                "subject": "Marie Curie",
-                "relation": "date of death",
-                "object": "4 July 1934",
-                "qualifiers": [],
-                "subject_type": "human",
-                "object_type": "date"
-            },
-            {
-                "subject": "Marie Curie",
-                "relation": "occupation",
-                "object": "physicist",
-                "qualifiers": [],
-                "subject_type": "human",
-                "object_type": "profession"
-            },
-            {
-                "subject": "Marie Curie",
-                "relation": "occupation",
-                "object": "chemist",
-                "qualifiers": [],
-                "subject_type": "human",
-                "object_type": "profession"
-            },
-            {
-                "subject": "Marie Curie",
-                "relation": "field of work",
-                "object": "radioactivity",
-                "qualifiers": [],
-                "subject_type": "human",
-                "object_type": "physical phenomenon"
-            },
-            {
-                "subject": "Marie Curie",
-                "relation": "award received",
-                "object": "Nobel Prize in Physics",
-                "qualifiers": [{"relation": "point in time", "object": '1903'}],
-                "subject_type": "human",
-                "object_type": "award"
-            },
-            {
-                "subject": "Marie Curie",
-                "relation": "award received",
-                "object": "Nobel Prize in Chemistry",
-                "qualifiers": [{"relation": "point in time", "object": "1911"}],
-                "subject_type": "human",
-                "object_type": "award"
-            }
-        ]
-    }
-
+...
 </example>
 \end{lstlisting}
 
