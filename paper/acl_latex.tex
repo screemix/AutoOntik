@@ -161,8 +161,7 @@ Building a KG with this structure from text remains challenging. Schema-free ext
 We present \textbf{AutoOntic}, an ontology construction pipeline that extends schema-free approaches to close this gap: on top of a deduplicated entity and relation vocabulary, it produces a
 hyponymy-aware, hierarchically organized type vocabulary, an entity
 vocabulary deduplicated against that hierarchy, and a set of
-per-relation domain/range constraints mined from it. The system can also extend an existing ontology when one is provided.
-(\S\ref{sec:methods}). Our contributions are:
+per-relation domain/range constraints mined from it. The system can also extend an existing ontology when one is provided (\S\ref{sec:methods}). Our contributions are:
 \begin{itemize}
   \item AutoOntic, a schema-free ontology induction method that combines corpus-derived relation-argument profiles with priority-ordered, top-down type placement. Unlike flat canonicalization, the procedure explicitly tests subsumption relationships and can retroactively reassign parent-child links when newly inserted types reveal a more specific placement. The resulting hierarchy is then used to constrain entity deduplication and to generalize observed relation domain/range types.
   \item An evaluation approach for schema-free ontology induction that scores an induced type hierarchy and its domain/range constraints directly against a benchmark's own reference ontology, classifying each type mismatch as \textsc{Exact}, \textsc{More General}, or \textsc{More Narrow} rather than a flat right/wrong (\S\ref{sec:evaluation}).
@@ -202,7 +201,7 @@ direction-corrected triplets provide evidence for domain/range constraints.
 
 \paragraph{Shared canonicalization procedure.}
 \label{sec:reoccurring-design}
-The following design choices reoccur across stages. (1) Deduplication of synonymous surface forms is performed by clustering Contriever sentence embeddings \citep{izacard2022contriever} with HDBSCAN \citep{campello2013hdbscan} at a stage-specific cosine-similarity threshold $\theta$, and every merge/split decision is adjudicated by a single LLM call per candidate cluster. (2) Merging is done through several rounds: each round re-embeds the current pool, re-clusters it, and sends multi-member clusters to the LLM for verification, folding accepted merges back into the pool for the next round. The procedure repeats until the vocabulary size stops reducing or a configurable round limit $R$ is reached. (3) The result of each stage is checkpointed once it completes, allowing independent inspection of every stage's output and reuse in follow-up experiments. Every $\theta$ and $R$ instance below is stage-specific (relation, type, and entity deduplication each set their own); concrete values for these and every other hyperparameter introduced in \S\ref{sec:relation-dedup}--\S\ref{sec:constraints} are collected in Table~\ref{tab:hyperparams} (Appendix~\ref{sec:appendix-hyperparams}).
+The following design choices reoccur across stages. (1) Deduplication of synonymous surface forms is performed by clustering Contriever sentence embeddings \citep{izacard2022contriever} with HDBSCAN~\citep{campello2013hdbscan} at a stage-specific cosine-similarity threshold $\theta$, and every merge/split decision is adjudicated by a single LLM call per candidate cluster. (2) Merging is done through several rounds: each round re-embeds the current pool, re-clusters it, and sends multi-member clusters to the LLM for verification, folding accepted merges back into the pool for the next round. The procedure repeats until the vocabulary size stops reducing or a configurable round limit $R$ is reached. (3) The result of each stage is checkpointed once it completes, allowing independent inspection of every stage's output and reuse in follow-up experiments. Every $\theta$ and $R$ instance below is stage-specific (relation, type, and entity deduplication each set their own); concrete values for these and every other hyperparameter introduced in \S\ref{sec:relation-dedup}--\S\ref{sec:constraints} are collected in Table~\ref{tab:hyperparams} (Appendix~\ref{sec:appendix-hyperparams}).
 
 \subsection{Typed Triplet Extraction}
 \label{sec:extraction}
@@ -908,7 +907,7 @@ Table~\ref{tab:text2kgbench-grounded} reports recall before and after this filte
 \centering
 \small
 \setlength{\tabcolsep}{3pt}
-\resizebox{\columnwidth}{!}{%
+\resizebox{0.8\columnwidth}{!}{%
 \begin{tabular}{lccc}
 \toprule
 Domain & Raw & Filtered & Ungr. (\%) \\
@@ -935,6 +934,7 @@ Averaged & 45.4 & 68.9 & 48.8 \\
 \begin{table}[t]
 \centering
 \small
+\resizebox{\columnwidth}{!}{%
 \begin{tabular}{lcc}
 \toprule
 Model & Recall, grounded & Recall, ungrounded \\
@@ -943,6 +943,7 @@ Qwen3-Next-80B & 68.9 & 20.6 \\
 gpt-oss-120b   & 69.9 & 19.7 \\
 \bottomrule
 \end{tabular}
+}
 \caption{Recall (\%) computed separately over the grounded and ungrounded gold-triple subsets, Averaged across all ten Wikidata-TekGen domains, \textsc{Separate} condition ($n=3{,}705$ grounded / $3{,}527$ ungrounded triplets, both models).}
 \label{tab:text2kgbench-grounded-split}
 \end{table}
