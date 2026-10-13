@@ -588,24 +588,54 @@ Pooled & 76.4 & 77.9 & 24.9 & 23.9 \\
 \begin{table*}[t]
 \centering
 \small
-\begin{tabular}{lll ccc ccc}
+\begin{tabular}{llll ccc ccc}
 \toprule
-& & & \multicolumn{3}{c}{Type Match} & \multicolumn{3}{c}{Constraint Plausibility} \\
+& & & & \multicolumn{3}{c}{Type Match} & \multicolumn{3}{c}{Constraint Plausibility} \\
 \midrule
-Dataset & Model & Side & Exact & More Gen. & More Narrow & Exact & More Gen. & More Narrow \\
+Condition & Dataset & Model & Side & Exact & More Gen. & More Narrow & Exact & More Gen. & More Narrow \\
 \midrule
-Wikidata-TekGen & Qwen3-Next-80B & Domain & 58.6 & 14.7 & 17.5 & 9.6  & 34.9 & 1.6 \\
-Wikidata-TekGen & Qwen3-Next-80B & Range  & 53.6 & 22.6 & 16.3 & 12.2 & 33.3 & 2.6  \\
-Wikidata-TekGen & gpt-oss-120b   & Domain & 58.0 & 10.9 & 23.1 & 9.1  & 53.9 & 1.2 \\
-Wikidata-TekGen & gpt-oss-120b   & Range  & 57.2 & 22.1 & 14.6 & 12.3 & 30.7 & 3.7 \\
+Baseline & Wikidata-TekGen & Qwen3-Next-80B & Domain & 58.6 & 14.7 & 17.5 & 9.6  & 34.9 & 1.6 \\
+Baseline & Wikidata-TekGen & Qwen3-Next-80B & Range  & 53.6 & 22.6 & 16.3 & 12.2 & 33.3 & 2.6 \\
+Baseline & Wikidata-TekGen & gpt-oss-120b   & Domain & 58.0 & 10.9 & 23.1 & 9.1  & 53.9 & 1.2 \\
+Baseline & Wikidata-TekGen & gpt-oss-120b   & Range  & 57.2 & 22.1 & 14.6 & 12.3 & 30.7 & 3.7 \\
+\cmidrule(lr){1-10}
+Seeded & Wikidata-TekGen & Qwen3-Next-80B & Domain & 58.5 & 14.6 & 17.6 & 3.4  & 77.7 & 1.6 \\
+Seeded & Wikidata-TekGen & Qwen3-Next-80B & Range  & 53.8 & 22.8 & 16.3 & 5.1  & 49.9 & 1.2 \\
+Seeded & Wikidata-TekGen & gpt-oss-120b   & Domain & 57.6 & 11.1 & 23.0 & 4.6  & 41.2 & 3.1 \\
+Seeded & Wikidata-TekGen & gpt-oss-120b   & Range  & 57.9 & 21.7 & 13.5 & 5.3  & 35.4 & 3.2 \\
+\cmidrule(lr){1-10}
+Depth $\leq$5 & Wikidata-TekGen & Qwen3-Next-80B & Domain & 58.2 & 14.9 & 18.0 & 3.9  & 76.3 & 3.3 \\
+Depth $\leq$5 & Wikidata-TekGen & Qwen3-Next-80B & Range  & 54.5 & 22.0 & 16.3 & 13.0 & 63.6 & 1.2 \\
+Depth $\leq$5 & Wikidata-TekGen & gpt-oss-120b   & Domain & 57.5 & 10.9 & 22.8 & 9.7  & 58.0 & 2.5 \\
+Depth $\leq$5 & Wikidata-TekGen & gpt-oss-120b   & Range  & 57.5 & 21.0 & 14.0 & 14.4 & 43.6 & 9.7 \\
+\cmidrule(lr){1-10}
+Depth $\leq$10 & Wikidata-TekGen & Qwen3-Next-80B & Domain & 58.7 & 14.4 & 17.9 & 4.5  & 91.0 & 1.7 \\
+Depth $\leq$10 & Wikidata-TekGen & Qwen3-Next-80B & Range  & 53.8 & 22.5 & 16.7 & 11.7 & 82.0 & 1.9 \\
+Depth $\leq$10 & Wikidata-TekGen & gpt-oss-120b   & Domain & 57.6 & 10.8 & 23.2 & 7.4  & 88.2 & 1.4 \\
+Depth $\leq$10 & Wikidata-TekGen & gpt-oss-120b   & Range  & 57.2 & 21.7 & 13.5 & 12.2 & 63.4 & 2.4 \\
 \midrule
-DBpedia-WebNLG  & Qwen3-Next-80B & Domain & 33.5 & 37.3 & 17.6 & 18.5 & 60.1 & 5.0 \\
-DBpedia-WebNLG  & Qwen3-Next-80B & Range  & 39.8 & 25.0 & 23.9 & 21.1 & 49.1 & 13.8 \\
-DBpedia-WebNLG  & gpt-oss-120b   & Domain & 27.3 & 36.7 & 23.8 & 21.3 & 56.9 & 6.1 \\
-DBpedia-WebNLG  & gpt-oss-120b   & Range  & 42.4 & 17.0 & 28.6 & 35.8 & 42.7 & 8.7  \\
+Baseline & DBpedia-WebNLG & Qwen3-Next-80B & Domain & 33.5 & 37.3 & 17.6 & 18.5 & 60.1 & 5.0 \\
+Baseline & DBpedia-WebNLG & Qwen3-Next-80B & Range  & 39.8 & 25.0 & 23.9 & 21.1 & 49.1 & 13.8 \\
+Baseline & DBpedia-WebNLG & gpt-oss-120b   & Domain & 27.3 & 36.7 & 23.8 & 21.3 & 56.9 & 6.1 \\
+Baseline & DBpedia-WebNLG & gpt-oss-120b   & Range  & 42.4 & 17.0 & 28.6 & 35.8 & 42.7 & 8.7 \\
+\cmidrule(lr){1-10}
+Seeded & DBpedia-WebNLG & Qwen3-Next-80B & Domain & 33.0 & 37.1 & 17.4 & 9.5  & 78.1 & 3.8 \\
+Seeded & DBpedia-WebNLG & Qwen3-Next-80B & Range  & 39.7 & 23.7 & 24.9 & 6.7  & 63.9 & 4.7 \\
+Seeded & DBpedia-WebNLG & gpt-oss-120b   & Domain & 27.2 & 36.6 & 23.5 & 14.4 & 54.2 & 6.2 \\
+Seeded & DBpedia-WebNLG & gpt-oss-120b   & Range  & 42.1 & 16.7 & 28.8 & 22.2 & 47.7 & 8.3 \\
+\cmidrule(lr){1-10}
+Depth $\leq$5 & DBpedia-WebNLG & Qwen3-Next-80B & Domain & 33.2 & 37.3 & 17.5 & 11.8 & 53.1 & 5.5 \\
+Depth $\leq$5 & DBpedia-WebNLG & Qwen3-Next-80B & Range  & 39.4 & 23.6 & 25.0 & 11.6 & 43.6 & 9.3 \\
+Depth $\leq$5 & DBpedia-WebNLG & gpt-oss-120b   & Domain & 27.2 & 36.5 & 23.6 & 17.3 & 60.4 & 4.1 \\
+Depth $\leq$5 & DBpedia-WebNLG & gpt-oss-120b   & Range  & 42.2 & 16.5 & 28.9 & 28.6 & 51.1 & 7.9 \\
+\cmidrule(lr){1-10}
+Depth $\leq$10 & DBpedia-WebNLG & Qwen3-Next-80B & Domain & 33.2 & 37.3 & 17.5 & 18.3 & 38.7 & 6.4 \\
+Depth $\leq$10 & DBpedia-WebNLG & Qwen3-Next-80B & Range  & 39.2 & 24.2 & 25.1 & 13.4 & 34.5 & 16.9 \\
+Depth $\leq$10 & DBpedia-WebNLG & gpt-oss-120b   & Domain & 27.1 & 36.6 & 23.5 & 20.6 & 57.3 & 5.5 \\
+Depth $\leq$10 & DBpedia-WebNLG & gpt-oss-120b   & Range  & 41.9 & 17.0 & 29.1 & 32.1 & 46.2 & 6.6 \\
 \bottomrule
 \end{tabular}
-\caption{Domain/range type-judgment distribution (\%, \S\ref{sec:evaluation}), averaged over matched pairs across all domains of each Text2KGBench subset. \emph{Type Match} compares each matched triplet's extracted type against gold; \emph{Constraint Plausibility} compares the relation's mined domain/range constraint instead.}
+\caption{Domain/range type-judgment distribution (\%, \S\ref{sec:evaluation}), averaged over matched pairs across all domains of each Text2KGBench subset, across four hierarchy-induction conditions. \emph{Type Match} compares each matched triplet's extracted type against gold; \emph{Constraint Plausibility} compares the relation's mined domain/range constraint instead. \textsc{Not Related} (omitted) is the remainder after Exact, More General, and More Narrow. \emph{Seeded} pins the top-level Wikidata-derived roots; \emph{Depth $\leq$5/$\leq$10} caps hierarchy depth at induction time. Only hierarchy induction differs across conditions -- relation/type canonicalization is held fixed per dataset/backbone.}
 \label{tab:text2kgbench-types}
 \end{table*}
 
